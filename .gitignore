@@ -46,3 +46,9 @@ backend/data/encryption.key
 # Databases
 *.db
 *.db-journal
+
+# Ingested market/chain data (regenerate with /api/ingest)
+backend/data/market/
+backend/data/hypersync_output/
+backend/data/*.jsonl
+backend/data/compaction_state.json

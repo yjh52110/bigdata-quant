@@ -1,4 +1,6 @@
+import asyncio
 import os
+import secrets
 import time
 import logging
 from collections import deque
@@ -7,7 +9,7 @@ import duckdb
 import psutil
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 
 from backend.google_account_manager import GoogleAccountManager
@@ -17,12 +19,30 @@ from backend.sync_status import get_sync_status
 from backend.alerting import list_alert_rules, send_test_alert, telegram_configured
 from backend.mcp_logs import read_recent_logs
 from backend.transfer_log import get_today_totals
+from backend.binance_ingestion import ingest_binance_klines
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 app = FastAPI(title="ChainQuantPlatform Admin API")
 
 QUANT_API_KEY = os.environ.get("QUANT_API_KEY")
+
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:8000")
+OAUTH_CALLBACK_PATH = "/api/accounts/oauth/callback"
+OAUTH_REDIRECT_URI = f"{PUBLIC_BASE_URL}{OAUTH_CALLBACK_PATH}"
+
+AUTH_EXEMPT_PATHS = {"/api/health", OAUTH_CALLBACK_PATH}
+
+OAUTH_SETUP_HINT = (
+    "Create an OAuth client (type: Web application) in Google Cloud Console, add "
+    f"{OAUTH_REDIRECT_URI} as an authorized redirect URI, and save the downloaded "
+    "JSON to backend/data/credentials.json."
+)
+
+# Maps the OAuth `state` nonce -> account_index. Because the callback can't
+# carry our X-API-Key header, this nonce is what proves the redirect belongs
+# to a flow we actually started.
+_pending_oauth: dict = {}
 
 
 @app.middleware("http")
@@ -31,7 +51,11 @@ async def api_key_guard(request: Request, call_next):
     /api/* request must present a matching X-API-Key header. If unset, the server
     stays open for local dev -- but this is logged loudly so it's never silently
     left open in a real deployment."""
-    if QUANT_API_KEY and request.url.path.startswith("/api/") and request.url.path != "/api/health":
+    # /api/health is public so the dashboard can discover whether auth is on.
+    # The OAuth callback is public because Google redirects the user's browser
+    # there directly and cannot attach our X-API-Key header; it is instead
+    # protected by the OAuth `state` nonce checked in the handler.
+    if QUANT_API_KEY and request.url.path.startswith("/api/") and request.url.path not in AUTH_EXEMPT_PATHS:
         if request.headers.get("x-api-key") != QUANT_API_KEY:
             return JSONResponse(status_code=401, content={"detail": "Missing or invalid X-API-Key header"})
     return await call_next(request)
@@ -113,11 +137,108 @@ def get_overview():
 def get_accounts():
     quotas = account_manager.get_all_quotas()
     status = account_manager.get_account_pool_status()
+    try:
+        account_manager.get_oauth_flow(redirect_uri=OAUTH_REDIRECT_URI)
+        oauth_ready, oauth_hint = True, None
+    except Exception:
+        oauth_ready, oauth_hint = False, OAUTH_SETUP_HINT
+
     return {
         "poolStatus": status,
         "accounts": quotas,
         "transferToday": get_today_totals(),
+        "oauthConfigured": oauth_ready,
+        "oauthHint": oauth_hint,
     }
+
+
+class AuthUrlRequest(BaseModel):
+    account_index: str
+
+
+@app.post("/api/accounts/auth-url")
+def create_auth_url(req: AuthUrlRequest):
+    """Starts the OAuth flow for one Drive account.
+
+    Uses a loopback redirect back into this API rather than the old
+    `urn:ietf:wg:oauth:2.0:oob` copy-paste flow, which Google has retired --
+    OOB would fail outright for any OAuth client created today.
+    """
+    if not req.account_index.strip():
+        raise HTTPException(status_code=400, detail="account_index must not be empty")
+    nonce = secrets.token_urlsafe(24)
+    try:
+        flow = account_manager.get_oauth_flow(redirect_uri=OAUTH_REDIRECT_URI)
+        auth_url, _ = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="select_account consent",
+            state=nonce,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=400, detail=OAUTH_SETUP_HINT)
+    except (ValueError, KeyError):
+        # A placeholder/invalid credentials.json lands here rather than
+        # FileNotFoundError, which would otherwise surface as an opaque 500.
+        raise HTTPException(status_code=400, detail=f"credentials.json is not a valid OAuth client secrets file. {OAUTH_SETUP_HINT}")
+    _pending_oauth[nonce] = req.account_index.strip()
+    return {"auth_url": auth_url, "redirect_uri": OAUTH_REDIRECT_URI}
+
+
+@app.get(OAUTH_CALLBACK_PATH, response_class=HTMLResponse)
+def oauth_callback(code: str = "", state: str = "", error: str = ""):
+    """Google redirects the browser here after consent."""
+    def page(title: str, detail: str, ok: bool) -> str:
+        color = "#34d399" if ok else "#f87171"
+        return (
+            f"<html><body style='background:#0f172a;color:#e2e8f0;font-family:system-ui;"
+            f"display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
+            f"<div style='text-align:center'><h2 style='color:{color}'>{title}</h2>"
+            f"<p style='color:#94a3b8'>{detail}</p></div></body></html>"
+        )
+
+    if error:
+        return HTMLResponse(page("Authorization failed", error, False), status_code=400)
+    account_index = _pending_oauth.pop(state, None)
+    if not account_index:
+        return HTMLResponse(page("Invalid or expired request", "Unknown OAuth state nonce.", False), status_code=400)
+    try:
+        account_manager.handle_callback(account_index, code, redirect_uri=OAUTH_REDIRECT_URI)
+    except Exception as e:
+        logging.error(f"OAuth callback failed for {account_index}: {e}")
+        return HTMLResponse(page("Could not connect account", str(e), False), status_code=400)
+    return HTMLResponse(page("Account connected", f"“{account_index}” is now in the pool. You can close this tab.", True))
+
+
+class IngestRequest(BaseModel):
+    source: str = "binance"
+    symbol: str = "BTCUSDT"
+    interval: str = "1m"
+    months: int = 1
+    chain: str = "ethereum"
+    from_block: int = 18000000
+    to_block: int = 18000100
+
+
+@app.post("/api/ingest")
+def trigger_ingest(req: IngestRequest):
+    """Runs an ingestion job synchronously and reports what actually landed."""
+    if req.source == "binance":
+        try:
+            result = ingest_binance_klines(req.symbol, req.interval, req.months)
+            mount_parquet_views(conn)
+            return result
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Binance ingestion failed: {e}")
+    if req.source == "hypersync":
+        try:
+            from backend.hypersync_ingestion import extract_chain_data
+            result = asyncio.run(extract_chain_data(req.from_block, req.to_block, req.chain))
+            mount_parquet_views(conn)
+            return {"files": result.files, "chain": result.chain, "is_synthetic": result.is_synthetic}
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Hypersync ingestion failed: {e}")
+    raise HTTPException(status_code=400, detail=f"Unknown source '{req.source}' (expected 'binance' or 'hypersync')")
 
 
 @app.get("/api/data-assets")
