@@ -3,6 +3,19 @@
 Blockchain and exchange market-data platform for AI-assisted quant research.
 Parquet on cheap storage, DuckDB for compute, exposed to LLM clients over MCP.
 
+## Architecture
+
+![Architecture flow](docs/architecture-flow.svg)
+
+Green is verified working end to end; amber is code complete but waiting on
+credentials. The left-hand chain (Binance -> Parquet -> DuckDB -> serving)
+needs no credentials at all. The three amber services on the right are
+optional attachments -- if any is unconfigured the main pipeline still runs,
+it just skips archiving, AI diagnosis or alerting respectively.
+
+Note the storage arrow direction: local Parquet feeds the Drive archive, not
+the other way round. DuckDB only ever reads local disk.
+
 ## What actually works today
 
 | Component | Status |
