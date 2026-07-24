@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { Activity, Database, Clock, Zap } from 'lucide-react';
 import { apiFetch } from '../api';
+import { useI18n } from '../i18n';
 
 export default function Overview() {
+  const { t } = useI18n();
   const [stats, setStats] = useState({
     activeAccounts: 0,
     totalDataSize: '0 GB',
@@ -27,20 +29,32 @@ export default function Overview() {
 
   const chartData = traffic.recent.map((r, i) => ({ i, latency: r.latency_ms }));
 
+  // The backend returns fixed English status strings; map the known ones so
+  // they follow the selected language instead of leaking through untranslated.
+  const backendStatus = (v: string) => {
+    const map: Record<string, Parameters<typeof t>[0]> = {
+      'Healthy': 'st.healthy',
+      'Not configured': 'st.notConfigured',
+      'Active': 'st.active',
+      'No accounts connected': 'st.noAccounts',
+    };
+    return map[v] ? t(map[v]) : v;
+  };
+
   return (
     <div className="min-h-full flex flex-col gap-6 animate-fade-in">
       <header>
-        <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">System Overview</h2>
-        <p className="text-slate-400 text-sm sm:text-base">Real-time metrics from the running backend process</p>
+        <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">{t('ov.title')}</h2>
+        <p className="text-slate-400 text-sm sm:text-base">{t('ov.subtitle')}</p>
       </header>
 
       {/* Top Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {[
-          { title: "Active Accounts", value: stats.activeAccounts, icon: Activity, color: "text-blue-400", bg: "bg-blue-500/20" },
-          { title: "Data Size", value: stats.totalDataSize, icon: Database, color: "text-emerald-400", bg: "bg-emerald-500/20" },
-          { title: "Avg API Latency", value: stats.apiLatency, icon: Zap, color: "text-amber-400", bg: "bg-amber-500/20" },
-          { title: "Gemini Status", value: stats.geminiStatus, icon: Clock, color: "text-purple-400", bg: "bg-purple-500/20" }
+          { title: t('ov.activeAccounts'), value: stats.activeAccounts, icon: Activity, color: "text-blue-400", bg: "bg-blue-500/20" },
+          { title: t('ov.dataSize'), value: stats.totalDataSize, icon: Database, color: "text-emerald-400", bg: "bg-emerald-500/20" },
+          { title: t('ov.latency'), value: stats.apiLatency, icon: Zap, color: "text-amber-400", bg: "bg-amber-500/20" },
+          { title: t('ov.gemini'), value: backendStatus(stats.geminiStatus), icon: Clock, color: "text-purple-400", bg: "bg-purple-500/20" }
         ].map((stat, i) => (
           <div key={i} className="glass-panel p-5 flex items-center justify-between group hover:scale-[1.02] transition-transform duration-300">
             <div>
@@ -57,11 +71,11 @@ export default function Overview() {
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1">
         <div className="lg:col-span-2 glass-panel p-5 flex flex-col">
-          <h3 className="text-lg font-semibold text-white mb-1">Recent Request Latency</h3>
-          <p className="text-xs text-slate-500 mb-4">Real per-request latency for this API process (last {traffic.recent.length} requests, {traffic.requests_total} total since startup)</p>
+          <h3 className="text-lg font-semibold text-white mb-1">{t('ov.latencyChart')}</h3>
+          <p className="text-xs text-slate-500 mb-4">{t('ov.latencyNote', { n: traffic.recent.length, total: traffic.requests_total })}</p>
           <div className="flex-1 min-h-[300px]">
             {chartData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-slate-500 text-sm">No requests recorded yet</div>
+              <div className="h-full flex items-center justify-center text-slate-500 text-sm">{t('ov.noRequests')}</div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData}>
@@ -84,11 +98,11 @@ export default function Overview() {
 
         <div className="glass-panel p-5 flex flex-col">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-white">Strategy Leaderboard</h3>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-400 uppercase tracking-wide">Preview — not real</span>
+            <h3 className="text-lg font-semibold text-white">{t('ov.leaderboard')}</h3>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-400 uppercase tracking-wide">{t('ov.previewBadge')}</span>
           </div>
           <p className="text-xs text-slate-500 mb-3">
-            Strategy mining isn't implemented yet. This is illustrative sample data, not output from a real backtest.
+            {t('ov.leaderboardNote')}
           </p>
           <div className="flex-1 overflow-y-auto space-y-3 pr-2 opacity-60">
             {[

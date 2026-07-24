@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Activity, Lock, Users, Plus, Copy } from 'lucide-react';
 import { apiFetch } from '../api';
+import { useI18n } from '../i18n';
 
 export default function MCPAudit() {
+  const { t } = useI18n();
   const [logs, setLogs] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [newUser, setNewUser] = useState('');
@@ -53,27 +55,27 @@ export default function MCPAudit() {
   return (
     <div className="min-h-full flex flex-col gap-6 animate-fade-in">
       <header>
-        <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">MCP Protocol & Audit Logs</h2>
-        <p className="text-slate-400 text-sm sm:text-base break-words">Real tool-call log from mcp_server.py (backend/data/mcp_invocations.jsonl)</p>
+        <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">{t('mcp.title')}</h2>
+        <p className="text-slate-400 text-sm sm:text-base break-words">{t('mcp.subtitle')}</p>
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="glass-panel p-5">
           <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
             <Lock className="text-blue-400" size={20} />
-            Invocation Count
+            {t('mcp.invocationCount')}
           </h3>
           <div className="text-4xl font-bold text-white">{logs.length}</div>
-          <p className="text-xs text-slate-500 mt-2">logged tool calls (most recent 100)</p>
+          <p className="text-xs text-slate-500 mt-2">{t('mcp.loggedCalls')}</p>
         </div>
 
         <div className="glass-panel p-5">
           <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
             <Activity className="text-amber-400" size={20} />
-            Errors / Blocked
+            {t('mcp.errors')}
           </h3>
           {errorCount === 0 ? (
-            <p className="text-slate-400">No errors or blocked queries in the recent log.</p>
+            <p className="text-slate-400">{t('mcp.noErrors')}</p>
           ) : (
             <div className="text-4xl font-bold text-red-400">{errorCount}</div>
           )}
@@ -83,17 +85,17 @@ export default function MCPAudit() {
       <div className="glass-panel p-5">
         <h3 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
           <Users size={18} className="text-emerald-400" />
-          MCP Users ({users.length})
+          {t('mcp.usersTitle', { n: users.length })}
         </h3>
         <p className="text-xs text-slate-500 mb-4">
-          Each user gets their own API key, daily quota and per-minute rate limit, enforced by the MCP server.
+          {t('mcp.usersNote')}
         </p>
 
         <div className="flex flex-col sm:flex-row gap-3 mb-4">
           <input
             value={newUser}
             onChange={e => setNewUser(e.target.value)}
-            placeholder="New user id, e.g. alice"
+            placeholder={t('mcp.newUserPlaceholder')}
             className="flex-1 px-4 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 outline-none focus:border-emerald-500"
           />
           <button
@@ -101,7 +103,7 @@ export default function MCPAudit() {
             disabled={!newUser.trim()}
             className="flex items-center justify-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
           >
-            <Plus size={16} /> Issue key
+            <Plus size={16} /> {t('mcp.issueKey')}
           </button>
         </div>
         {userError && <p className="text-red-400 text-sm mb-3">{userError}</p>}
@@ -109,14 +111,14 @@ export default function MCPAudit() {
         {issuedKey && (
           <div className="mb-4 p-3 rounded-lg bg-emerald-900/25 border border-emerald-600/40">
             <p className="text-xs text-emerald-300 mb-2">
-              Key for <strong>{issuedKey.user}</strong> — copy it now, it can't be shown again.
+              {t('mcp.keyFor', { user: issuedKey.user })}
             </p>
             <div className="flex items-center gap-2">
               <code className="flex-1 text-xs font-mono text-emerald-200 break-all">{issuedKey.key}</code>
               <button
                 onClick={() => navigator.clipboard?.writeText(issuedKey.key)}
                 className="p-1.5 text-emerald-300 hover:text-white hover:bg-emerald-700/40 rounded flex-shrink-0"
-                title="Copy"
+                title={t('mcp.copy')}
               >
                 <Copy size={14} />
               </button>
@@ -128,16 +130,16 @@ export default function MCPAudit() {
           <table className="w-full text-left border-collapse min-w-[520px]">
             <thead>
               <tr className="border-b border-slate-700">
-                <th className="py-2 px-3 text-sm font-semibold text-slate-400">User</th>
-                <th className="py-2 px-3 text-sm font-semibold text-slate-400">Key</th>
-                <th className="py-2 px-3 text-sm font-semibold text-slate-400">Today</th>
-                <th className="py-2 px-3 text-sm font-semibold text-slate-400">Rate</th>
-                <th className="py-2 px-3 text-sm font-semibold text-slate-400 text-right">Status</th>
+                <th className="py-2 px-3 text-sm font-semibold text-slate-400">{t('mcp.colUser')}</th>
+                <th className="py-2 px-3 text-sm font-semibold text-slate-400">{t('mcp.colKey')}</th>
+                <th className="py-2 px-3 text-sm font-semibold text-slate-400">{t('mcp.colToday')}</th>
+                <th className="py-2 px-3 text-sm font-semibold text-slate-400">{t('mcp.colRate')}</th>
+                <th className="py-2 px-3 text-sm font-semibold text-slate-400 text-right">{t('mcp.colStatus')}</th>
               </tr>
             </thead>
             <tbody>
               {users.length === 0 ? (
-                <tr><td colSpan={5} className="py-5 text-center text-slate-500">No MCP users yet.</td></tr>
+                <tr><td colSpan={5} className="py-5 text-center text-slate-500">{t('mcp.noUsers')}</td></tr>
               ) : users.map((u, i) => (
                 <tr key={i} className="border-b border-slate-700/30 hover:bg-slate-800/40 transition-colors">
                   <td className="py-2 px-3 text-slate-200">{u.user_id}</td>
@@ -153,7 +155,7 @@ export default function MCPAudit() {
                           : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/30'
                       }`}
                     >
-                      {u.disabled ? 'Disabled' : 'Active'}
+                      {u.disabled ? t('mcp.disabled') : t('mcp.enabled')}
                     </button>
                   </td>
                 </tr>
@@ -164,10 +166,10 @@ export default function MCPAudit() {
       </div>
 
       <div className="flex-1 glass-panel p-5 flex flex-col">
-        <h3 className="text-lg font-semibold text-white mb-4">Live Invocation Logs</h3>
+        <h3 className="text-lg font-semibold text-white mb-4">{t('mcp.liveLogs')}</h3>
         <div className="flex-1 bg-slate-950 rounded-lg border border-slate-800 p-4 font-mono text-xs overflow-y-auto space-y-2">
           {logs.length === 0 ? (
-            <div className="text-slate-600 italic">No MCP tool calls logged yet. Call a tool via mcp_server.py to see entries here.</div>
+            <div className="text-slate-600 italic">{t('mcp.noLogs')}</div>
           ) : logs.map((log, i) => (
             <div key={i} className="flex flex-wrap gap-x-3 gap-y-1 border-b border-slate-800/50 pb-1.5 sm:border-0 sm:pb-0">
               <span className="text-slate-500">{log.time}</span>

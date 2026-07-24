@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Lock } from 'lucide-react';
 import { API_BASE_URL, setApiKey } from '../api';
+import { useI18n } from '../i18n';
 
 export default function Login({ onSuccess }: { onSuccess: () => void }) {
+  const { t, lang, setLang } = useI18n();
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -22,10 +24,10 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
         setApiKey(password);
         onSuccess();
       } else {
-        setError('Incorrect password.');
+        setError(t('login.wrong'));
       }
     } catch {
-      setError(`Could not reach the backend at ${API_BASE_URL}.`);
+      setError(`${t('login.unreachable')} ${API_BASE_URL}`);
     } finally {
       setChecking(false);
     }
@@ -39,8 +41,8 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
             <Lock className="text-blue-400" size={22} />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-white">ChainQuant Admin</h1>
-            <p className="text-sm text-slate-400 mt-1">Enter the admin password to continue</p>
+            <h1 className="text-xl font-bold text-white">{t('login.title')}</h1>
+            <p className="text-sm text-slate-400 mt-1">{t('login.prompt')}</p>
           </div>
         </div>
 
@@ -49,7 +51,7 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
           autoFocus
           value={password}
           onChange={e => setPassword(e.target.value)}
-          placeholder="Password"
+          placeholder={t('login.password')}
           className="w-full px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 outline-none focus:border-blue-500 transition-colors"
         />
 
@@ -60,8 +62,23 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
           disabled={checking}
           className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white font-medium rounded-lg transition-colors"
         >
-          {checking ? 'Checking...' : 'Unlock'}
+          {checking ? t('login.checking') : t('login.unlock')}
         </button>
+
+        <div className="flex gap-1 bg-slate-800/60 rounded-lg p-1">
+          {(['zh', 'en'] as const).map(l => (
+            <button
+              key={l}
+              type="button"
+              onClick={() => setLang(l)}
+              className={`flex-1 text-xs py-1.5 rounded-md transition-colors ${
+                lang === l ? 'bg-blue-500/25 text-blue-300' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {l === 'zh' ? '中文' : 'English'}
+            </button>
+          ))}
+        </div>
       </form>
     </div>
   );

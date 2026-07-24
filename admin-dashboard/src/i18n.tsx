@@ -1,0 +1,219 @@
+import React, { createContext, useContext, useEffect, useState } from 'react';
+
+export type Lang = 'zh' | 'en';
+
+const STORAGE_KEY = 'chainquant_lang';
+
+const dict = {
+  'nav.overview': { zh: '总览', en: 'Overview' },
+  'nav.accounts': { zh: '谷歌账号', en: 'Google Accounts' },
+  'nav.assets': { zh: '数据资产', en: 'Data Assets' },
+  'nav.duckdb': { zh: 'DuckDB 引擎', en: 'DuckDB Engine' },
+  'nav.gemini': { zh: 'Gemini 密钥池', en: 'Gemini AI Pool' },
+  'nav.mcp': { zh: 'MCP 与审计', en: 'MCP & Audit' },
+  'nav.infra': { zh: '基础设施', en: 'Infrastructure' },
+
+  'app.subtitle': { zh: '系统控制中心', en: 'System Control Center' },
+  'app.apiReachable': { zh: '接口正常', en: 'API Reachable' },
+  'app.apiUnreachable': { zh: '接口不可达', en: 'API Unreachable' },
+  'app.apiChecking': { zh: '正在检测接口…', en: 'Checking API...' },
+  'app.logout': { zh: '退出登录', en: 'Log out' },
+  'app.connecting': { zh: '正在连接后端…', en: 'Connecting to backend...' },
+  'app.cannotReach': { zh: '无法连接后端', en: 'Cannot reach the backend at' },
+  'app.startHint': { zh: '请先启动后端后刷新页面。', en: 'Start it and reload.' },
+
+  'login.title': { zh: 'ChainQuant 管理后台', en: 'ChainQuant Admin' },
+  'login.prompt': { zh: '请输入管理密码', en: 'Enter the admin password to continue' },
+  'login.password': { zh: '密码', en: 'Password' },
+  'login.unlock': { zh: '进入', en: 'Unlock' },
+  'login.checking': { zh: '验证中…', en: 'Checking...' },
+  'login.wrong': { zh: '密码错误。', en: 'Incorrect password.' },
+  'login.unreachable': { zh: '无法连接后端服务。', en: 'Could not reach the backend.' },
+
+  'ov.title': { zh: '系统总览', en: 'System Overview' },
+  'ov.subtitle': { zh: '来自后端进程的实时指标', en: 'Real-time metrics from the running backend process' },
+  'ov.activeAccounts': { zh: '可用账号', en: 'Active Accounts' },
+  'ov.dataSize': { zh: '数据总量', en: 'Data Size' },
+  'ov.latency': { zh: '平均接口延迟', en: 'Avg API Latency' },
+  'ov.gemini': { zh: 'Gemini 状态', en: 'Gemini Status' },
+  'ov.latencyChart': { zh: '近期请求延迟', en: 'Recent Request Latency' },
+  'ov.latencyNote': { zh: '本接口进程的真实每请求延迟（最近 {n} 次，启动至今共 {total} 次）', en: 'Real per-request latency for this API process (last {n} requests, {total} total since startup)' },
+  'ov.noRequests': { zh: '暂无请求记录', en: 'No requests recorded yet' },
+  'ov.leaderboard': { zh: '策略榜单', en: 'Strategy Leaderboard' },
+  'ov.previewBadge': { zh: '示例 — 非真实', en: 'Preview — not real' },
+  'ov.leaderboardNote': { zh: '策略挖掘尚未实现。以下为示意数据，并非真实回测结果。', en: "Strategy mining isn't implemented yet. This is illustrative sample data, not output from a real backtest." },
+
+  'acc.title': { zh: '谷歌账号池', en: 'Google Account Pool' },
+  'acc.summary': { zh: '{n} 个账号 · 总容量 {tb} TB', en: '{n} accounts · {tb} TB total capacity' },
+  'acc.add': { zh: '添加账号', en: 'Add account' },
+  'acc.sync': { zh: '刷新状态', en: 'Sync Status' },
+  'acc.connectTitle': { zh: '连接谷歌云盘账号', en: 'Connect a Google Drive account' },
+  'acc.labelPlaceholder': { zh: '账号标识，例如 acc-01', en: 'Account label, e.g. acc-01' },
+  'acc.authorize': { zh: '前往谷歌授权', en: 'Authorize with Google' },
+  'acc.transferTitle': { zh: '今日自记录传输量', en: 'Self-Tracked Transfer Today' },
+  'acc.transferNote': { zh: '谷歌云盘接口不提供每日配额用量，这里的数字由本平台自行统计，因此不包含平台之外产生的传输。', en: "Google's Drive API doesn't expose daily quota usage — these numbers are tallied locally from transfers this platform itself initiated, so they undercount anything moved outside this pipeline." },
+  'acc.upload': { zh: '上传（每日上限 750GB）', en: 'Upload (750GB/day limit)' },
+  'acc.download': { zh: '下载（每日上限 10TB）', en: 'Download (10TB/day limit)' },
+  'acc.healthTitle': { zh: 'Rclone 联合挂载账号健康度', en: 'Rclone Union Account Health' },
+  'acc.colId': { zh: '账号标识', en: 'Account ID' },
+  'acc.colEmail': { zh: '邮箱', en: 'Email' },
+  'acc.colStatus': { zh: '状态', en: 'Status' },
+  'acc.colUsage': { zh: '已用 / 总量', en: 'Used / Limit' },
+  'acc.empty': { zh: '尚未连接任何谷歌账号，请点击上方「添加账号」。', en: 'No Google accounts connected yet. Use "Add account" above to connect one.' },
+  'acc.active': { zh: '正常', en: 'Active' },
+  'acc.unknown': { zh: '未知', en: 'Unknown' },
+
+  'da.title': { zh: '数据资产与同步监控', en: 'Data Assets & Sync Monitor' },
+  'da.summary': { zh: '文件总数 {total}（真实 {real} / 合成 {syn}），大小 {size} MB', en: 'Total Files: {total} ({real} real / {syn} synthetic), Size: {size} MB' },
+  'da.filterAll': { zh: '全部', en: 'all' },
+  'da.filterReal': { zh: '真实', en: 'real' },
+  'da.filterSynthetic': { zh: '合成', en: 'synthetic' },
+  'da.ingestTitle': { zh: '拉取行情数据', en: 'Ingest market data' },
+  'da.ingestNote': { zh: '从币安公开数据源批量下载月度 K 线，无需密钥与配额。已下载的月份会自动跳过。', en: 'Pulls free monthly klines from data.binance.vision — no API key or quota required. Already-downloaded months are skipped.' },
+  'da.months': { zh: '{n} 个月', en: '{n} month(s)' },
+  'da.ingest': { zh: '开始拉取', en: 'Ingest' },
+  'da.ingesting': { zh: '拉取中…', en: 'Ingesting...' },
+  'da.ingestDone': { zh: '完成：共 {rows} 行，新增 {w} 个月，已存在 {s} 个月', en: 'Done: {rows} rows across {w} new month(s), {s} already present' },
+  'da.ingestFailed': { zh: '拉取失败', en: 'Ingestion failed' },
+  'da.syntheticWarn': { zh: '{syn} / {total} 个文件为合成测试数据（文件名以 synthetic_ 开头），并非真实链上数据。配置 HYPERSYNC_API_TOKEN 后重新拉取即可替换。', en: '{syn} of {total} file(s) are synthetic test fixtures (filename starts with synthetic_), not real chain data. Set HYPERSYNC_API_TOKEN and run ingestion to replace them.' },
+  'da.hypersyncNote': { zh: '通过 collect_parquet() 将真实链上数据直接流式写入 Parquet，需在 app.envio.dev 申请免费令牌。', en: 'Streams real on-chain data straight to Parquet via collect_parquet(). Requires a free token from app.envio.dev.' },
+  'da.realFiles': { zh: '真实 Parquet 文件', en: 'Real Parquet Files' },
+  'da.synFiles': { zh: '合成测试文件', en: 'Synthetic Test Files' },
+  'da.totalSize': { zh: '总大小', en: 'Total Size' },
+  'da.rcloneTitle': { zh: 'Rclone 联合同步', en: 'Rclone Union Sync' },
+  'da.rcloneNone': { zh: '尚未配置——未找到 rclone 联合远端。请先连接谷歌账号并运行联合挂载管理。', en: 'Not configured yet — no rclone union remote found. Connect Google accounts and run the union manager.' },
+  'da.upstreams': { zh: '健康上游账号', en: 'Healthy upstream accounts' },
+  'da.policy': { zh: '路由策略', en: 'Routing policy' },
+  'da.watchdogTitle': { zh: '文件合并守护进程', en: 'Compaction Watchdog' },
+  'da.status': { zh: '状态', en: 'Status' },
+  'da.running': { zh: '运行中', en: 'Running' },
+  'da.notRunning': { zh: '未运行', en: 'Not running' },
+  'da.filesCompacted': { zh: '累计合并文件数', en: 'Files compacted (total)' },
+  'da.lastCompaction': { zh: '上次合并时间', en: 'Last compaction' },
+  'da.never': { zh: '从未运行', en: 'Never run' },
+  'da.ingestedFiles': { zh: '已入库文件', en: 'Ingested Files' },
+  'da.colFile': { zh: '文件', en: 'File' },
+  'da.colSize': { zh: '大小', en: 'Size' },
+  'da.colSource': { zh: '来源', en: 'Source' },
+  'da.real': { zh: '真实', en: 'Real' },
+  'da.synthetic': { zh: '合成', en: 'Synthetic' },
+  'da.loading': { zh: '加载中…', en: 'Loading...' },
+  'da.noFiles': { zh: '尚未拉取任何 Parquet 文件。', en: 'No parquet files ingested yet.' },
+  'da.noneOfType': { zh: '没有{filter}类型的文件。', en: 'No {filter} files.' },
+
+  'db.title': { zh: 'DuckDB 计算引擎', en: 'DuckDB Compute Engine' },
+  'db.subtitle': { zh: '对已入库 Parquet 数据执行内存分析查询（仅允许只读 SELECT）', en: 'In-memory analytical queries over ingested Parquet data (read-only SELECT only)' },
+  'db.mountedViews': { zh: '已挂载视图（{n}）', en: 'Mounted Views ({n})' },
+  'db.noViews': { zh: '尚未挂载任何 Parquet 数据，请先拉取数据。', en: 'No parquet data mounted yet — ingest data first.' },
+  'db.sandbox': { zh: 'SQL 交互沙盒', en: 'Interactive SQL Sandbox' },
+  'db.placeholder': { zh: '输入只读 SELECT 查询…', en: 'Type a read-only SELECT query...' },
+  'db.available': { zh: '可用视图：', en: 'Available:' },
+  'db.none': { zh: '无', en: 'none' },
+  'db.execute': { zh: '执行查询', en: 'Execute Query' },
+  'db.running': { zh: '执行中…', en: 'Running...' },
+  'db.rowsIn': { zh: '{n} 行，耗时 {ms} 毫秒', en: '{n} row(s) in {ms}ms' },
+  'db.queryFailed': { zh: '查询失败', en: 'Query failed' },
+
+  'gm.title': { zh: 'Gemini 密钥池', en: 'Gemini AI Key Pool' },
+  'gm.subtitle': { zh: '每个密钥的真实轮询状态（GEMINI_API_KEY / GEMINI_API_KEYS）', en: 'Real per-key rotation status (GEMINI_API_KEY / GEMINI_API_KEYS)' },
+  'gm.notConfigured': { zh: '尚未配置 Gemini 密钥。请在启动后端前设置环境变量 GEMINI_API_KEY（单个）或 GEMINI_API_KEYS（逗号分隔多个）。', en: 'No Gemini keys configured. Set GEMINI_API_KEY (single) or GEMINI_API_KEYS (comma-separated) as environment variables before starting the backend.' },
+  'gm.requestsToday': { zh: '今日请求数（全部密钥）', en: 'Requests Today (all keys)' },
+  'gm.activeKeys': { zh: '可用密钥', en: 'Active Keys' },
+  'gm.cooldown': { zh: '冷却 / 已耗尽', en: 'Cooldown / Exhausted' },
+  'gm.rotationTitle': { zh: '密钥轮询状态', en: 'Key Rotation Status' },
+  'gm.colKey': { zh: '密钥（已脱敏）', en: 'Key (masked)' },
+  'gm.colStatus': { zh: '状态', en: 'Status' },
+  'gm.colToday': { zh: '今日请求', en: 'Requests Today' },
+  'gm.colCooldown': { zh: '剩余冷却', en: 'Cooldown Remaining' },
+  'gm.empty': { zh: '未配置任何密钥。', en: 'No keys configured.' },
+  'gm.active': { zh: '可用', en: 'Active' },
+  'gm.cooling': { zh: '冷却中', en: 'Cooldown' },
+
+  'mcp.title': { zh: 'MCP 协议与审计日志', en: 'MCP Protocol & Audit Logs' },
+  'mcp.subtitle': { zh: '来自 MCP 服务端的真实调用日志', en: 'Real tool-call log from mcp_server.py' },
+  'mcp.invocationCount': { zh: '调用次数', en: 'Invocation Count' },
+  'mcp.loggedCalls': { zh: '条已记录调用（最近 100 条）', en: 'logged tool calls (most recent 100)' },
+  'mcp.errors': { zh: '错误 / 被拦截', en: 'Errors / Blocked' },
+  'mcp.noErrors': { zh: '近期日志中无错误或被拦截的查询。', en: 'No errors or blocked queries in the recent log.' },
+  'mcp.usersTitle': { zh: 'MCP 用户（{n}）', en: 'MCP Users ({n})' },
+  'mcp.usersNote': { zh: '每个用户拥有独立密钥、每日配额与每分钟频率限制，由 MCP 服务端强制执行。', en: 'Each user gets their own API key, daily quota and per-minute rate limit, enforced by the MCP server.' },
+  'mcp.newUserPlaceholder': { zh: '新用户标识，例如 alice', en: 'New user id, e.g. alice' },
+  'mcp.issueKey': { zh: '签发密钥', en: 'Issue key' },
+  'mcp.keyFor': { zh: '{user} 的密钥 — 请立即复制，之后无法再次查看。', en: "Key for {user} — copy it now, it can't be shown again." },
+  'mcp.copy': { zh: '复制', en: 'Copy' },
+  'mcp.colUser': { zh: '用户', en: 'User' },
+  'mcp.colKey': { zh: '密钥', en: 'Key' },
+  'mcp.colToday': { zh: '今日用量', en: 'Today' },
+  'mcp.colRate': { zh: '频率上限', en: 'Rate' },
+  'mcp.colStatus': { zh: '状态', en: 'Status' },
+  'mcp.noUsers': { zh: '尚未创建任何 MCP 用户。', en: 'No MCP users yet.' },
+  'mcp.enabled': { zh: '启用', en: 'Active' },
+  'mcp.disabled': { zh: '已禁用', en: 'Disabled' },
+  'mcp.liveLogs': { zh: '实时调用日志', en: 'Live Invocation Logs' },
+  'mcp.noLogs': { zh: '尚无 MCP 调用记录。通过 MCP 客户端调用工具后即可在此看到。', en: 'No MCP tool calls logged yet. Call a tool via mcp_server.py to see entries here.' },
+
+  'infra.title': { zh: '基础设施与告警', en: 'Infrastructure & Alerts' },
+  'infra.subtitle': { zh: '主机监控与告警路由', en: 'Host Monitoring and Alert Routing' },
+  'infra.host': { zh: '本机计算节点（并非 Colab / Contabo 集群）', en: 'Local compute host (this machine — not a Colab/Contabo cluster)' },
+  'infra.cpu': { zh: 'CPU 占用', en: 'CPU Util' },
+  'infra.ram': { zh: '内存', en: 'RAM' },
+  'infra.disk': { zh: '磁盘', en: 'Disk' },
+  'infra.hostNote': { zh: '以上为当前运行后端的这台机器的真实指标。目前没有接入独立的 Colab / Contabo 部署——把后端部署到那里后，此处即会显示对应主机。', en: 'These are real stats for whatever machine is running the FastAPI backend right now. There is no separate Colab/Contabo deployment wired up — deploy the backend there and this card will reflect that host instead.' },
+  'infra.alertRules': { zh: '告警路由规则', en: 'Alert Routing Rules' },
+  'infra.telegramOn': { zh: 'Telegram 已配置', en: 'Telegram configured' },
+  'infra.telegramOff': { zh: 'Telegram 未配置', en: 'Telegram not configured' },
+  'infra.sendTest': { zh: '发送测试告警', en: 'Send test alert' },
+  'infra.sending': { zh: '发送中…', en: 'Sending...' },
+  'infra.sent': { zh: '已发送！', en: 'Sent!' },
+  'infra.failed': { zh: '发送失败', en: 'Failed' },
+  'infra.colCondition': { zh: '触发条件', en: 'Trigger Condition' },
+  'infra.colSeverity': { zh: '级别', en: 'Severity' },
+  'infra.colChannel': { zh: '通道', en: 'Channel' },
+
+  'st.healthy': { zh: '正常', en: 'Healthy' },
+  'st.notConfigured': { zh: '未配置', en: 'Not configured' },
+  'st.active': { zh: '同步中', en: 'Active' },
+  'st.noAccounts': { zh: '尚无已连接账号', en: 'No accounts connected' },
+  'st.ok': { zh: '正常', en: 'ok' },
+  'st.expired': { zh: '已过期', en: 'expired' },
+  'st.error': { zh: '异常', en: 'error' },
+
+  'rule.duckdb_slow_query': { zh: 'DuckDB 查询超过 5 秒', en: 'DuckDB query > 5s' },
+  'rule.vps_ram_high': { zh: '主机内存占用超过 95%', en: 'Host RAM > 95%' },
+  'rule.drive_rate_limited': { zh: '谷歌云盘接口返回 403/429', en: 'Google Drive API 403/429 response' },
+  'rule.gemini_keys_exhausted': { zh: '所有 Gemini 密钥进入冷却', en: 'All configured Gemini keys in cooldown' },
+
+  'sev.Critical': { zh: '严重', en: 'Critical' },
+  'sev.Error': { zh: '错误', en: 'Error' },
+  'sev.Warning': { zh: '警告', en: 'Warning' },
+  'sev.Info': { zh: '提示', en: 'Info' },
+} as const;
+
+export type Key = keyof typeof dict;
+
+type Ctx = { lang: Lang; setLang: (l: Lang) => void; t: (k: Key, vars?: Record<string, string | number>) => string };
+
+const I18nContext = createContext<Ctx>({ lang: 'zh', setLang: () => {}, t: (k) => k });
+
+export function I18nProvider({ children }: { children: React.ReactNode }) {
+  const [lang, setLangState] = useState<Lang>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved === 'zh' || saved === 'en') return saved;
+    return navigator.language?.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+  });
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, lang);
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  }, [lang]);
+
+  const t = (k: Key, vars?: Record<string, string | number>) => {
+    let s: string = dict[k]?.[lang] ?? k;
+    if (vars) for (const [name, val] of Object.entries(vars)) s = s.replaceAll(`{${name}}`, String(val));
+    return s;
+  };
+
+  return <I18nContext.Provider value={{ lang, setLang: setLangState, t }}>{children}</I18nContext.Provider>;
+}
+
+export const useI18n = () => useContext(I18nContext);

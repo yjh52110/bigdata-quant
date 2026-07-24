@@ -20,18 +20,21 @@ import MCPAudit from './components/MCPAudit';
 import Infrastructure from './components/Infrastructure';
 import Login from './components/Login';
 import { API_BASE_URL, getApiKey, clearApiKey } from './api';
+import { useI18n } from './i18n';
+import type { Key as I18nKey } from './i18n';
 
-const menuItems = [
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard, component: Overview },
-  { id: 'google-accounts', label: 'Google Accounts', icon: Cloud, component: GoogleAccounts },
-  { id: 'data-assets', label: 'Data Assets', icon: Database, component: DataAssets },
-  { id: 'duckdb', label: 'DuckDB Engine', icon: Cpu, component: DuckDBEngine },
-  { id: 'gemini', label: 'Gemini AI Pool', icon: Key, component: GeminiPool },
-  { id: 'mcp-audit', label: 'MCP & Audit', icon: Shield, component: MCPAudit },
-  { id: 'infrastructure', label: 'Infrastructure', icon: Activity, component: Infrastructure },
+const menuItems: { id: string; labelKey: I18nKey; icon: typeof LayoutDashboard; component: React.ComponentType }[] = [
+  { id: 'overview', labelKey: 'nav.overview', icon: LayoutDashboard, component: Overview },
+  { id: 'google-accounts', labelKey: 'nav.accounts', icon: Cloud, component: GoogleAccounts },
+  { id: 'data-assets', labelKey: 'nav.assets', icon: Database, component: DataAssets },
+  { id: 'duckdb', labelKey: 'nav.duckdb', icon: Cpu, component: DuckDBEngine },
+  { id: 'gemini', labelKey: 'nav.gemini', icon: Key, component: GeminiPool },
+  { id: 'mcp-audit', labelKey: 'nav.mcp', icon: Shield, component: MCPAudit },
+  { id: 'infrastructure', labelKey: 'nav.infra', icon: Activity, component: Infrastructure },
 ];
 
 function App() {
+  const { t, lang, setLang } = useI18n();
   const [activeModule, setActiveModule] = useState(menuItems[0].id);
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -77,16 +80,17 @@ function App() {
   if (authRequired === null && apiHealthy !== false) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-slate-900 text-slate-400 text-sm">
-        Connecting to backend...
+        {t('app.connecting')}
       </div>
     );
   }
 
   if (apiHealthy === false) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-slate-900 text-slate-400 text-sm px-4 text-center">
-        Cannot reach the backend at {API_BASE_URL}. Start it with{' '}
-        <code className="mx-1 text-slate-300">uvicorn backend.api_server:app --port 8000</code> and reload.
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-slate-400 text-sm px-4 text-center gap-2">
+        <p>{t('app.cannotReach')} {API_BASE_URL}</p>
+        <code className="text-slate-300">./start.sh</code>
+        <p>{t('app.startHint')}</p>
       </div>
     );
   }
@@ -114,7 +118,7 @@ function App() {
             <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">
               ChainQuant Admin
             </h1>
-            <p className="text-xs text-slate-400 mt-1">System Control Center</p>
+            <p className="text-xs text-slate-400 mt-1">{t('app.subtitle')}</p>
           </div>
           <button className="lg:hidden text-slate-400 hover:text-white" onClick={() => setSidebarOpen(false)}>
             <X size={20} />
@@ -132,17 +136,30 @@ function App() {
               }`}
             >
               <item.icon size={18} className={activeModule === item.id ? 'animate-pulse' : ''} />
-              {item.label}
+              {t(item.labelKey)}
             </button>
           ))}
         </nav>
         <div className="p-4 border-t border-slate-700/50 space-y-3">
+          <div className="flex gap-1 bg-slate-800/60 rounded-lg p-1">
+            {(['zh', 'en'] as const).map(l => (
+              <button
+                key={l}
+                onClick={() => setLang(l)}
+                className={`flex-1 text-xs py-1.5 rounded-md transition-colors ${
+                  lang === l ? 'bg-blue-500/25 text-blue-300' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {l === 'zh' ? '中文' : 'English'}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center gap-3 px-2">
             <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
               apiHealthy === null ? 'bg-slate-500' : apiHealthy ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500 shadow-[0_0_8px_#ef4444]'
             }`}></div>
             <span className="text-xs text-slate-400 font-medium">
-              {apiHealthy === null ? 'Checking API...' : apiHealthy ? 'API Reachable' : 'API Unreachable'}
+              {apiHealthy === null ? t('app.apiChecking') : apiHealthy ? t('app.apiReachable') : t('app.apiUnreachable')}
             </span>
           </div>
           {authRequired && (
@@ -150,7 +167,7 @@ function App() {
               onClick={handleLogout}
               className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-slate-400 hover:text-red-400 transition-colors"
             >
-              <LogOut size={14} /> Log out
+              <LogOut size={14} /> {t('app.logout')}
             </button>
           )}
         </div>
