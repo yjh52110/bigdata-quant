@@ -1,0 +1,23 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Compiled Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Local database (persisted via Docker volume at runtime)
+drivepool.db
+*.db
+
+# Secrets / env files
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db

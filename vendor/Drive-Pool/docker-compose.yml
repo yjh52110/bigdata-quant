@@ -1,0 +1,41 @@
+services:
+
+  backend:
+    build:
+      context: ./backend        # build context is the backend/ folder
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Allow browser requests from the frontend origin
+      FRONTEND_URL: http://localhost:3000
+      # Public URL the browser can reach — used to build the OAuth callback URI
+      # (request.base_url inside Docker would resolve to the internal service name)
+      BACKEND_URL: http://localhost:8000
+      # Persist the database in a named volume instead of inside the container
+      DB_PATH: /app/data/drivepool.db
+      # Point config.py at the bind-mounted credentials directory
+      CONFIG_DIR: /app/config
+    volumes:
+      # Google OAuth credentials — place credentials.json here before starting
+      - ./config:/app/config:ro
+      # SQLite database survives container restarts and image rebuilds
+      - drivepool_data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend       # build context is the frontend/ folder
+      dockerfile: Dockerfile
+      args:
+        # Server-side Next.js rewrites resolve via the Docker network service name
+        NEXT_PUBLIC_API_URL: http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  # Named volume — persists drivepool.db across rebuilds
+  drivepool_data:
