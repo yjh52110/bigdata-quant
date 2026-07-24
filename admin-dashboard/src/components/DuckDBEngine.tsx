@@ -68,7 +68,7 @@ export default function DuckDBEngine() {
               <button
                 key={i}
                 onClick={() => setQuery(`SELECT * FROM ${tbl} LIMIT 20;`)}
-                className="text-xs font-mono px-3 py-1.5 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:border-blue-500 hover:text-blue-300 transition-colors"
+                className="text-xs font-mono px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:border-blue-500 hover:text-blue-300 transition-colors"
               >
                 {tbl}
               </button>
@@ -95,7 +95,7 @@ export default function DuckDBEngine() {
           <button
             onClick={handleExecute}
             disabled={running}
-            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white font-medium rounded transition-colors shadow-lg shadow-blue-500/20 text-sm flex-shrink-0"
+            className="px-6 min-h-[44px] sm:min-h-0 sm:py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white font-medium rounded transition-colors shadow-lg shadow-blue-500/20 text-sm flex-shrink-0"
           >
             {running ? t('db.running') : t('db.execute')}
           </button>

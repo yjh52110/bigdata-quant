@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Activity, Lock, Users, Plus, Copy } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
+import ResponsiveTable from './ResponsiveTable';
 
 export default function MCPAudit() {
   const { t } = useI18n();
@@ -126,43 +127,31 @@ export default function MCPAudit() {
           </div>
         )}
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[520px]">
-            <thead>
-              <tr className="border-b border-slate-700">
-                <th className="py-2 px-3 text-sm font-semibold text-slate-400">{t('mcp.colUser')}</th>
-                <th className="py-2 px-3 text-sm font-semibold text-slate-400">{t('mcp.colKey')}</th>
-                <th className="py-2 px-3 text-sm font-semibold text-slate-400">{t('mcp.colToday')}</th>
-                <th className="py-2 px-3 text-sm font-semibold text-slate-400">{t('mcp.colRate')}</th>
-                <th className="py-2 px-3 text-sm font-semibold text-slate-400 text-right">{t('mcp.colStatus')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.length === 0 ? (
-                <tr><td colSpan={5} className="py-5 text-center text-slate-500">{t('mcp.noUsers')}</td></tr>
-              ) : users.map((u, i) => (
-                <tr key={i} className="border-b border-slate-700/30 hover:bg-slate-800/40 transition-colors">
-                  <td className="py-2 px-3 text-slate-200">{u.user_id}</td>
-                  <td className="py-2 px-3 text-slate-500 font-mono text-xs">{u.api_key_masked}</td>
-                  <td className="py-2 px-3 text-slate-300 font-mono text-sm">{u.used_today}/{u.daily_quota}</td>
-                  <td className="py-2 px-3 text-slate-400 font-mono text-sm">{u.rate_per_min}/min</td>
-                  <td className="py-2 px-3 text-right">
-                    <button
-                      onClick={() => toggleUser(u.user_id, !u.disabled)}
-                      className={`text-xs px-2 py-1 rounded border transition-colors ${
-                        u.disabled
-                          ? 'bg-red-500/20 text-red-400 border-red-500/30 hover:bg-red-500/30'
-                          : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/30'
-                      }`}
-                    >
-                      {u.disabled ? t('mcp.disabled') : t('mcp.enabled')}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          rows={users}
+          empty={t('mcp.noUsers')}
+          columns={[
+            { key: 'user', header: t('mcp.colUser'), render: (u: any) => u.user_id },
+            { key: 'apikey', header: t('mcp.colKey'), cellClass: 'text-slate-500 font-mono text-xs', render: (u: any) => u.api_key_masked },
+            { key: 'today', header: t('mcp.colToday'), cellClass: 'text-slate-300 font-mono text-sm', render: (u: any) => `${u.used_today}/${u.daily_quota}` },
+            { key: 'rate', header: t('mcp.colRate'), cellClass: 'text-slate-400 font-mono text-sm', render: (u: any) => `${u.rate_per_min}/min` },
+            {
+              key: 'status', header: t('mcp.colStatus'), alignRight: true,
+              render: (u: any) => (
+                <button
+                  onClick={() => toggleUser(u.user_id, !u.disabled)}
+                  className={`text-xs px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded border transition-colors ${
+                    u.disabled
+                      ? 'bg-red-500/20 text-red-400 border-red-500/30 hover:bg-red-500/30'
+                      : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/30'
+                  }`}
+                >
+                  {u.disabled ? t('mcp.disabled') : t('mcp.enabled')}
+                </button>
+              ),
+            },
+          ]}
+        />
       </div>
 
       <div className="flex-1 glass-panel p-5 flex flex-col">

@@ -170,7 +170,7 @@ function App() {
         <div className="h-full glass-panel overflow-y-auto">
           <div className="p-4 sm:p-6 lg:p-8 h-full">
             <button
-              className="lg:hidden mb-4 p-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-300"
+              className="lg:hidden mb-4 w-11 h-11 flex items-center justify-center rounded-lg bg-slate-800 border border-slate-700 text-slate-300"
               onClick={() => setSidebarOpen(true)}
             >
               <Menu size={20} />

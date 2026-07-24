@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { KeyRound } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
+import ResponsiveTable from './ResponsiveTable';
 
 export default function GeminiPool() {
   const { t } = useI18n();
@@ -56,38 +57,32 @@ export default function GeminiPool() {
 
       <div className="flex-1 glass-panel p-5 flex flex-col">
         <h3 className="text-lg font-semibold text-white mb-4">{t('gm.rotationTitle')}</h3>
-        <div className="flex-1 overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[500px]">
-            <thead>
-              <tr className="border-b border-slate-700">
-                <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('gm.colKey')}</th>
-                <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('gm.colStatus')}</th>
-                <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('gm.colToday')}</th>
-                <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('gm.colCooldown')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {status.keys.length === 0 ? (
-                <tr><td colSpan={4} className="py-6 text-center text-slate-500">{t('gm.empty')}</td></tr>
-              ) : status.keys.map((k: any, i: number) => (
-                <tr key={i} className="border-b border-slate-700/30 hover:bg-slate-800/40 transition-colors">
-                  <td className="py-3 px-4 flex items-center gap-2">
-                    <KeyRound size={14} className="text-slate-500" />
-                    <span className="text-slate-200 font-mono text-sm">{k.alias}</span>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className={`flex items-center gap-1.5 text-sm ${k.status === 'Active' ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      <span className={`w-2 h-2 rounded-full ${k.status === 'Active' ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
-                      {k.status === 'Active' ? t('gm.active') : t('gm.cooling')}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-sm font-mono text-slate-300">{k.requests_today}</td>
-                  <td className="py-3 px-4 text-sm font-mono text-slate-400">{k.cooldown_remaining_s > 0 ? `${k.cooldown_remaining_s}s` : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          rows={status.keys}
+          empty={t('gm.empty')}
+          columns={[
+            {
+              key: 'alias', header: t('gm.colKey'),
+              render: (k: any) => (
+                <span className="flex items-center gap-2 justify-end sm:justify-start">
+                  <KeyRound size={14} className="text-slate-500 flex-shrink-0" />
+                  <span className="text-slate-200 font-mono text-sm">{k.alias}</span>
+                </span>
+              ),
+            },
+            {
+              key: 'status', header: t('gm.colStatus'),
+              render: (k: any) => (
+                <span className={`inline-flex items-center gap-1.5 text-sm ${k.status === 'Active' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  <span className={`w-2 h-2 rounded-full ${k.status === 'Active' ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+                  {k.status === 'Active' ? t('gm.active') : t('gm.cooling')}
+                </span>
+              ),
+            },
+            { key: 'today', header: t('gm.colToday'), cellClass: 'font-mono text-sm text-slate-300', render: (k: any) => k.requests_today },
+            { key: 'cool', header: t('gm.colCooldown'), cellClass: 'font-mono text-sm text-slate-400', render: (k: any) => k.cooldown_remaining_s > 0 ? `${k.cooldown_remaining_s}s` : '—' },
+          ]}
+        />
       </div>
     </div>
   );

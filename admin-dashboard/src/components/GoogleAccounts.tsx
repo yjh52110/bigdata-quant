@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { RefreshCw, Plus } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
+import ResponsiveTable from './ResponsiveTable';
 
 const fmtBytes = (b: number) => {
   if (!b) return '0 GB';
@@ -134,38 +135,27 @@ export default function GoogleAccounts() {
 
         <div className="lg:col-span-2 glass-panel p-5">
           <h3 className="text-lg font-semibold text-white mb-4">{t('acc.healthTitle')}</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[620px]">
-              <thead>
-                <tr className="border-b border-slate-700">
-                  <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('acc.colId')}</th>
-                  <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('acc.colEmail')}</th>
-                  <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('acc.colStatus')}</th>
-                  <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('acc.colUsage')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {accounts.length === 0 ? (
-                  <tr><td colSpan={4} className="py-6 text-center text-slate-500">{t('acc.empty')}</td></tr>
-                ) : accounts.map((acc: any, i: number) => (
-                  <tr key={i} className="border-b border-slate-700/30 hover:bg-slate-800/40 transition-colors">
-                    <td className="py-3 px-4 text-slate-200 font-medium">{acc.account_index}</td>
-                    <td className="py-3 px-4 text-slate-400 text-sm">{acc.email || t('acc.unknown')}</td>
-                    <td className="py-3 px-4">
-                      <span className={`px-2 py-1 text-xs font-semibold rounded bg-opacity-20 border border-opacity-30 ${
-                        acc.health === 'ok' ? 'bg-emerald-500 border-emerald-500 text-emerald-400' :
-                        acc.health === 'expired' ? 'bg-amber-500 border-amber-500 text-amber-400' :
-                        'bg-red-500 border-red-500 text-red-400'
-                      }`}>
-                        {acc.is_connected ? t('acc.active') : t(acc.health === 'expired' ? 'st.expired' : 'st.error')}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-slate-300 text-sm">{fmtBytes(acc.used || 0)} / {fmtBytes(acc.limit || 0)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            rows={accounts}
+            empty={t('acc.empty')}
+            columns={[
+              { key: 'id', header: t('acc.colId'), cellClass: 'text-slate-200 font-medium', render: (a: any) => a.account_index },
+              { key: 'email', header: t('acc.colEmail'), cellClass: 'text-slate-400 text-sm', render: (a: any) => a.email || t('acc.unknown') },
+              {
+                key: 'status', header: t('acc.colStatus'),
+                render: (a: any) => (
+                  <span className={`px-2 py-1 text-xs font-semibold rounded bg-opacity-20 border border-opacity-30 ${
+                    a.health === 'ok' ? 'bg-emerald-500 border-emerald-500 text-emerald-400' :
+                    a.health === 'expired' ? 'bg-amber-500 border-amber-500 text-amber-400' :
+                    'bg-red-500 border-red-500 text-red-400'
+                  }`}>
+                    {a.is_connected ? t('acc.active') : t(a.health === 'expired' ? 'st.expired' : 'st.error')}
+                  </span>
+                ),
+              },
+              { key: 'usage', header: t('acc.colUsage'), cellClass: 'text-slate-300 text-sm', render: (a: any) => `${fmtBytes(a.used || 0)} / ${fmtBytes(a.limit || 0)}` },
+            ]}
+          />
         </div>
       </div>
     </div>

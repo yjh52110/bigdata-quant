@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Server, Bell, Cpu, MemoryStick, HardDrive, Send } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
+import ResponsiveTable from './ResponsiveTable';
 
 export default function Infrastructure() {
   const { t } = useI18n();
@@ -87,44 +88,34 @@ export default function Infrastructure() {
             <button
               onClick={sendTest}
               disabled={!alerts.telegram_configured}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-xs rounded-lg transition-colors"
+              className="flex items-center justify-center gap-1.5 px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-xs rounded-lg transition-colors"
             >
               <Send size={12} /> {t('infra.sendTest')}
             </button>
           </div>
         </div>
         {testResult && <p className="text-xs text-slate-400 mb-3">{testResult}</p>}
-        <div className="overflow-x-auto flex-1">
-          <table className="w-full text-left border-collapse min-w-[420px]">
-            <thead>
-              <tr className="border-b border-slate-700">
-                <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('infra.colCondition')}</th>
-                <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('infra.colSeverity')}</th>
-                <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('infra.colChannel')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {alerts.rules.map((rule, i) => (
-                <tr key={i} className="border-b border-slate-700/30 hover:bg-slate-800/40 transition-colors">
-                  <td className="py-3 px-4 text-slate-200 text-sm">{tRule(rule)}</td>
-                  <td className="py-3 px-4">
-                    <span className={`text-xs px-2 py-1 rounded ${
-                      rule.severity === 'Critical' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
-                      rule.severity === 'Error' ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' :
-                      rule.severity === 'Warning' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
-                      'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                    }`}>
-                      {tSeverity(rule.severity)}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-sm text-slate-400">
-                    <span className="bg-slate-700/50 px-2 py-0.5 rounded text-xs">{rule.channel}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          rows={alerts.rules}
+          empty="—"
+          columns={[
+            { key: 'cond', header: t('infra.colCondition'), cellClass: 'text-slate-200 text-sm', render: (r: any) => tRule(r) },
+            {
+              key: 'sev', header: t('infra.colSeverity'),
+              render: (r: any) => (
+                <span className={`text-xs px-2 py-1 rounded ${
+                  r.severity === 'Critical' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                  r.severity === 'Error' ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' :
+                  r.severity === 'Warning' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                  'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                }`}>
+                  {tSeverity(r.severity)}
+                </span>
+              ),
+            },
+            { key: 'ch', header: t('infra.colChannel'), render: (r: any) => <span className="bg-slate-700/50 px-2 py-0.5 rounded text-xs text-slate-400">{r.channel}</span> },
+          ]}
+        />
       </div>
     </div>
   );

@@ -3,6 +3,7 @@ import { Database, UploadCloud, Filter, Zap, Archive, Download } from 'lucide-re
 
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
+import ResponsiveTable from './ResponsiveTable';
 
 type AssetFilter = 'all' | 'real' | 'synthetic';
 
@@ -81,7 +82,7 @@ export default function DataAssets() {
             <button
               key={f}
               onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 rounded-lg border text-sm capitalize transition-colors ${
+              className={`px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-lg border text-sm capitalize transition-colors ${
                 filter === f
                   ? 'bg-blue-500/20 border-blue-500/40 text-blue-300'
                   : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
@@ -111,7 +112,7 @@ export default function DataAssets() {
           <select
             value={months}
             onChange={e => setMonths(Number(e.target.value))}
-            className="px-4 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white outline-none focus:border-emerald-500"
+            className="px-4 min-h-[44px] rounded-lg bg-slate-800 border border-slate-700 text-white outline-none focus:border-emerald-500"
           >
             {[1, 3, 6, 12, 24].map(m => <option key={m} value={m}>{t('da.months', { n: m })}</option>)}
           </select>
@@ -206,35 +207,24 @@ export default function DataAssets() {
           <Database size={18} className="text-slate-400" />
           {t('da.ingestedFiles')}
         </h3>
-        <div className="glass-panel p-0 overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[500px]">
-            <thead>
-              <tr className="border-b border-slate-700">
-                <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('da.colFile')}</th>
-                <th className="py-3 px-4 text-sm font-semibold text-slate-400">{t('da.colSize')}</th>
-                <th className="py-3 px-4 text-sm font-semibold text-slate-400 text-right">{t('da.colSource')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={3} className="py-6 text-center text-slate-500">{t('da.loading')}</td></tr>
-              ) : visibleAssets.length === 0 ? (
-                <tr><td colSpan={3} className="py-6 text-center text-slate-500">
-                  {assetsInfo.total_files === 0 ? t('da.noFiles') : t('da.noneOfType', { filter: filter === 'real' ? t('da.filterReal') : filter === 'synthetic' ? t('da.filterSynthetic') : t('da.filterAll') })}
-                </td></tr>
-              ) : visibleAssets.map((a: any, i: number) => (
-                <tr key={i} className="border-b border-slate-700/30 hover:bg-slate-800/40 transition-colors">
-                  <td className="py-3 px-4 text-slate-200 font-mono text-sm">{a.filename}</td>
-                  <td className="py-3 px-4 text-slate-400 text-sm">{a.size_str}</td>
-                  <td className="py-3 px-4 text-right">
-                    <span className={`text-xs px-2 py-1 rounded ${a.is_synthetic ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}`}>
-                      {a.is_synthetic ? t('da.synthetic') : t('da.real')}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="glass-panel p-3 sm:p-0">
+          <ResponsiveTable
+            rows={visibleAssets}
+            loading={loading ? t('da.loading') : undefined}
+            empty={assetsInfo.total_files === 0 ? t('da.noFiles') : t('da.noneOfType', { filter: filter === 'real' ? t('da.filterReal') : filter === 'synthetic' ? t('da.filterSynthetic') : t('da.filterAll') })}
+            columns={[
+              { key: 'file', header: t('da.colFile'), cellClass: 'text-slate-200 font-mono text-xs sm:text-sm break-all', render: (a: any) => a.filename },
+              { key: 'size', header: t('da.colSize'), cellClass: 'text-slate-400 text-sm', render: (a: any) => a.size_str },
+              {
+                key: 'source', header: t('da.colSource'), alignRight: true,
+                render: (a: any) => (
+                  <span className={`text-xs px-2 py-1 rounded ${a.is_synthetic ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}`}>
+                    {a.is_synthetic ? t('da.synthetic') : t('da.real')}
+                  </span>
+                ),
+              },
+            ]}
+          />
         </div>
       </div>
     </div>
