@@ -1,0 +1,1 @@
+{"chain": "ethereum", "from_block": 18000000, "to_block": 18000010, "is_synthetic": true, "success": true, "files": ["/Users/yjh/Desktop/OpenBrowser-main/ChainQuantPlatform/backend/data/hypersync_output/symbol=ETHEREUM/synthetic_18000000_18000010.parquet"], "logged_at": 1784909615.3418071}

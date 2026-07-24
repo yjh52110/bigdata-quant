@@ -16,7 +16,7 @@ class MultiKeyGeminiPool:
     - Exponential backoff upon encountering 429 Rate Limit errors
     - Cooldown management for exhausted keys
     """
-    def __init__(self, api_keys: List[str]):
+    def __init__(self, api_keys: Optional[List[str]] = None):
         if not api_keys:
             env_keys = os.environ.get("GEMINI_API_KEYS")
             single_key = os.environ.get("GEMINI_API_KEY")
@@ -25,15 +25,58 @@ class MultiKeyGeminiPool:
             elif single_key:
                 api_keys = [single_key]
             else:
-                api_keys = ["AIzaSyMockKeyForDevTestOnly12345"]
+                api_keys = []
         self.api_keys = api_keys
         self.current_index = 0
         self.key_cooldowns: Dict[str, float] = {key: 0.0 for key in api_keys}
+        self.requests_today: Dict[str, int] = {key: 0 for key in api_keys}
+        self._day_bucket = time.strftime("%Y-%m-%d", time.gmtime())
+
+    def _roll_daily_counters_if_needed(self):
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        if today != self._day_bucket:
+            self._day_bucket = today
+            self.requests_today = {key: 0 for key in self.api_keys}
+
+    @staticmethod
+    def _mask(key: str) -> str:
+        if len(key) <= 8:
+            return "***"
+        return f"{key[:6]}...{key[-4:]}"
+
+    def get_status(self) -> Dict[str, Any]:
+        """Real per-key status for the admin dashboard: masked alias, cooldown
+        state, and today's request count. No hardcoded numbers."""
+        self._roll_daily_counters_if_needed()
+        now = time.time()
+        keys_status = []
+        for key in self.api_keys:
+            in_cooldown = now < self.key_cooldowns.get(key, 0.0)
+            keys_status.append({
+                "alias": self._mask(key),
+                "status": "Cooldown" if in_cooldown else "Active",
+                "cooldown_remaining_s": max(0, round(self.key_cooldowns.get(key, 0.0) - now)),
+                "requests_today": self.requests_today.get(key, 0),
+            })
+        active = sum(1 for k in keys_status if k["status"] == "Active")
+        return {
+            "configured": len(self.api_keys) > 0,
+            "total_keys": len(self.api_keys),
+            "active_keys": active,
+            "exhausted_keys": len(self.api_keys) - active,
+            "requests_today_total": sum(self.requests_today.values()),
+            "keys": keys_status,
+        }
 
     def _get_next_available_key(self) -> str:
+        if not self.api_keys:
+            raise RuntimeError(
+                "No Gemini API keys configured. Set GEMINI_API_KEY or GEMINI_API_KEYS "
+                "(comma-separated) before calling the Gemini pool."
+            )
         now = time.time()
         start_idx = self.current_index
-        
+
         while True:
             key = self.api_keys[self.current_index]
             self.current_index = (self.current_index + 1) % len(self.api_keys)
@@ -59,6 +102,7 @@ class MultiKeyGeminiPool:
         """
         Attempts to generate content, rotating keys and using exponential backoff on 429/failures.
         """
+        self._roll_daily_counters_if_needed()
         for attempt in range(max_retries):
             key = self._get_next_available_key()
             try:
@@ -68,6 +112,7 @@ class MultiKeyGeminiPool:
                     model=model_name,
                     contents=prompt,
                 )
+                self.requests_today[key] = self.requests_today.get(key, 0) + 1
                 return response.text
             except Exception as e:
                 err_str = str(e)
@@ -110,6 +155,7 @@ class MultiKeyGeminiPool:
 
 if __name__ == "__main__":
     print("Testing MultiKeyGeminiPool with 2026 Google Gen AI SDK...")
-    pool = MultiKeyGeminiPool(api_keys=[])
-    key = pool._get_next_available_key()
-    print(f"Key pool initialized successfully! Selected key: {key[:8]}...")
+    pool = MultiKeyGeminiPool()
+    print(f"Key pool status: {pool.get_status()}")
+    if not pool.api_keys:
+        print("No GEMINI_API_KEY(S) configured -- this is the real, honest status, not a mock key.")

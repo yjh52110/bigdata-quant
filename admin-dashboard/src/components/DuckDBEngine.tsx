@@ -1,20 +1,30 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, Terminal, XOctagon } from 'lucide-react';
+import { Terminal, Table2 } from 'lucide-react';
 import { API_BASE_URL } from '../App';
 
 export default function DuckDBEngine() {
-  const [tables, setTables] = useState([]);
-  const [query, setQuery] = useState("SELECT * FROM 'data/sample.parquet' LIMIT 10;");
-  const [result, setResult] = useState(null);
+  const [tables, setTables] = useState<string[]>([]);
+  const [query, setQuery] = useState("SELECT 1 AS status, 'DuckDB engine ready' AS message;");
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
 
-  useEffect(() => {
+  const loadTables = () => {
     fetch(`${API_BASE_URL}/api/duckdb/tables`)
       .then(r => r.json())
       .then(data => setTables(data.tables || []))
       .catch(console.error);
+  };
+
+  useEffect(() => {
+    loadTables();
+    const interval = setInterval(loadTables, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleExecute = async () => {
+    setRunning(true);
+    setError(null);
     try {
       const res = await fetch(`${API_BASE_URL}/api/duckdb/query`, {
         method: 'POST',
@@ -22,70 +32,47 @@ export default function DuckDBEngine() {
         body: JSON.stringify({ query })
       });
       const data = await res.json();
-      setResult(data);
+      if (!res.ok) {
+        setError(data.detail || 'Query failed');
+        setResult(null);
+      } else {
+        setResult(data);
+      }
     } catch (e) {
-      console.error(e);
+      setError(String(e));
+    } finally {
+      setRunning(false);
+      loadTables();
     }
   };
+
   return (
     <div className="h-full flex flex-col gap-6 animate-fade-in">
       <header>
         <h2 className="text-3xl font-bold text-white mb-2">DuckDB Compute Engine</h2>
-        <p className="text-slate-400">In-memory analytical queries & NVMe caching</p>
+        <p className="text-slate-400">In-memory analytical queries over ingested Parquet data (read-only SELECT only)</p>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="glass-panel p-5">
-          <h3 className="text-lg font-semibold text-white mb-4">Cache Hit Ratios</h3>
-          <div className="space-y-6">
-            <div className="relative pt-6">
-              <div className="absolute top-0 left-0 text-xs font-bold text-slate-400 tracking-wider uppercase">Hot Cache (RAM)</div>
-              <div className="flex items-end gap-2 mb-2">
-                <span className="text-3xl font-bold text-emerald-400">94.2%</span>
-                <span className="text-sm text-slate-400 mb-1">hit rate</span>
-              </div>
-              <div className="w-full bg-slate-700/50 rounded-full h-2"><div className="bg-emerald-500 h-2 rounded-full w-[94.2%]"></div></div>
-            </div>
-            
-            <div className="relative pt-6">
-              <div className="absolute top-0 left-0 text-xs font-bold text-slate-400 tracking-wider uppercase">Cold Cache (NVMe)</div>
-              <div className="flex items-end gap-2 mb-2">
-                <span className="text-3xl font-bold text-blue-400">68.5%</span>
-                <span className="text-sm text-slate-400 mb-1">hit rate</span>
-              </div>
-              <div className="w-full bg-slate-700/50 rounded-full h-2"><div className="bg-blue-500 h-2 rounded-full w-[68.5%]"></div></div>
-            </div>
+      <div className="glass-panel p-5">
+        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+          <Table2 size={18} className="text-blue-400" />
+          Mounted Views ({tables.length})
+        </h3>
+        {tables.length === 0 ? (
+          <p className="text-sm text-slate-500">No parquet data mounted yet — ingest data first.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {tables.map((t, i) => (
+              <button
+                key={i}
+                onClick={() => setQuery(`SELECT * FROM ${t} LIMIT 20;`)}
+                className="text-xs font-mono px-3 py-1.5 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:border-blue-500 hover:text-blue-300 transition-colors"
+              >
+                {t}
+              </button>
+            ))}
           </div>
-        </div>
-
-        <div className="lg:col-span-2 glass-panel p-5 flex flex-col">
-          <h3 className="text-lg font-semibold text-white mb-4 flex items-center justify-between">
-            <span>Active SQL Queue</span>
-            <span className="text-xs bg-slate-800 border border-slate-700 px-2 py-1 rounded text-slate-300">4 running</span>
-          </h3>
-          <div className="flex-1 overflow-auto">
-            <div className="space-y-3">
-              {[
-                { id: "q_8892", time: "42s", query: "SELECT symbol, AVG(price) FROM dex_trades WHERE...", status: "running" },
-                { id: "q_8893", time: "18s", query: "WITH moving_avg AS (SELECT * FROM eth_quotes...)", status: "running" },
-                { id: "q_8894", time: "115s", query: "SELECT * FROM polymarket_events JOIN predictions...", status: "slow" },
-              ].map((q, i) => (
-                <div key={i} className="flex items-center justify-between bg-slate-900/60 p-3 rounded border border-slate-700/50 hover:border-slate-600 transition-colors">
-                  <div className="flex-1 font-mono text-sm">
-                    <span className="text-purple-400 mr-3">[{q.id}]</span>
-                    <span className="text-slate-300 truncate inline-block max-w-[200px] sm:max-w-md">{q.query}</span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <span className={`text-xs font-mono ${q.status === 'slow' ? 'text-red-400 font-bold' : 'text-slate-400'}`}>{q.time}</span>
-                    <button className="text-slate-500 hover:text-red-400 transition-colors" title="Kill Query">
-                      <XOctagon size={18} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        )}
       </div>
 
       <div className="flex-1 glass-panel p-0 flex flex-col overflow-hidden border-t-4 border-t-blue-500">
@@ -93,20 +80,56 @@ export default function DuckDBEngine() {
           <Terminal size={16} className="text-blue-400" />
           <span className="text-sm font-mono text-slate-300">Interactive SQL Sandbox</span>
         </div>
-        <div className="flex-1 p-4 bg-[#0d1117] font-mono text-sm text-slate-300 focus-within:ring-1 focus-within:ring-blue-500/50 transition-shadow">
-          <textarea 
+        <div className="flex-1 p-4 bg-[#0d1117] font-mono text-sm text-slate-300 focus-within:ring-1 focus-within:ring-blue-500/50 transition-shadow min-h-[120px]">
+          <textarea
             className="w-full h-full bg-transparent resize-none outline-none"
-            placeholder="Type your DuckDB SQL query here... e.g. SELECT * FROM 's3://bucket/data.parquet' LIMIT 10;"
+            placeholder="Type a read-only SELECT query..."
             value={query}
             onChange={e => setQuery(e.target.value)}
           />
         </div>
-        <div className="bg-slate-800/80 px-4 py-3 border-t border-slate-700 flex justify-between">
-          <span className="text-sm text-slate-400">Available Tables: {tables.join(', ')}</span>
-          <button onClick={handleExecute} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded transition-colors shadow-lg shadow-blue-500/20 text-sm">
-            Execute Query (⌘+Enter)
+        <div className="bg-slate-800/80 px-4 py-3 border-t border-slate-700 flex justify-between items-center">
+          <span className="text-sm text-slate-400">Available: {tables.join(', ') || 'none'}</span>
+          <button
+            onClick={handleExecute}
+            disabled={running}
+            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white font-medium rounded transition-colors shadow-lg shadow-blue-500/20 text-sm"
+          >
+            {running ? 'Running...' : 'Execute Query'}
           </button>
         </div>
+
+        {(result || error) && (
+          <div className="border-t border-slate-700 p-4 max-h-64 overflow-auto bg-slate-900/60">
+            {error ? (
+              <p className="text-red-400 text-sm font-mono">{error}</p>
+            ) : (
+              <>
+                <p className="text-xs text-emerald-400 mb-2 font-mono">
+                  {result.row_count} row(s) in {result.duration_ms}ms
+                </p>
+                <table className="w-full text-left text-xs font-mono">
+                  <thead>
+                    <tr>
+                      {result.columns.map((c: string, i: number) => (
+                        <th key={i} className="px-2 py-1 text-slate-400 border-b border-slate-700">{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.data.slice(0, 50).map((row: any, i: number) => (
+                      <tr key={i} className="border-b border-slate-800">
+                        {result.columns.map((c: string, j: number) => (
+                          <td key={j} className="px-2 py-1 text-slate-300">{String(row[c])}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 import os
 import logging
 import configparser
-from google_account_manager import GoogleAccountManager
+from backend.google_account_manager import GoogleAccountManager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -52,9 +52,15 @@ def update_union_config():
         config.add_section(UNION_REMOTE_NAME)
         
     config.set(UNION_REMOTE_NAME, "type", "union")
-    # Using 'ff' (first found) or similar policies as needed, here we just set the upstreams
     upstreams = " ".join([f"{acc}:/" for acc in healthy_accounts])
     config.set(UNION_REMOTE_NAME, "upstreams", upstreams)
+    # epmfs = "existing path, most free space": new files land on whichever healthy
+    # account currently has the most free quota. This is what the PDF calls "配额
+    # 超额自动流转调度" -- previously this key was never set, so the union silently
+    # fell back to rclone's default policy instead of the promised routing behavior.
+    config.set(UNION_REMOTE_NAME, "create_policy", "epmfs")
+    config.set(UNION_REMOTE_NAME, "action_policy", "epall")
+    config.set(UNION_REMOTE_NAME, "search_policy", "ff")
     
     with open(RCLONE_CONFIG_PATH, "w") as f:
         config.write(f)

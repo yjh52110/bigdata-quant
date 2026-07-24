@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
-import { 
-  LayoutDashboard, 
-  Cloud, 
-  Database, 
-  Cpu, 
-  Key, 
-  Shield, 
-  Activity 
+import React, { useState, useEffect } from 'react';
+import {
+  LayoutDashboard,
+  Cloud,
+  Database,
+  Cpu,
+  Key,
+  Shield,
+  Activity
 } from 'lucide-react';
 import Overview from './components/Overview';
 import GoogleAccounts from './components/GoogleAccounts';
@@ -30,8 +30,20 @@ const menuItems = [
 
 function App() {
   const [activeModule, setActiveModule] = useState(menuItems[0].id);
+  const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
 
   const ActiveComponent = menuItems.find(m => m.id === activeModule)?.component || Overview;
+
+  useEffect(() => {
+    const check = () => {
+      fetch(`${API_BASE_URL}/api/health`)
+        .then(r => setApiHealthy(r.ok))
+        .catch(() => setApiHealthy(false));
+    };
+    check();
+    const interval = setInterval(check, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-200 overflow-hidden font-sans">
@@ -39,7 +51,7 @@ function App() {
       <aside className="w-64 glass-panel m-4 flex flex-col z-10 flex-shrink-0">
         <div className="p-6 border-b border-slate-700/50">
           <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">
-            OpenBrowser Admin
+            ChainQuant Admin
           </h1>
           <p className="text-xs text-slate-400 mt-1">System Control Center</p>
         </div>
@@ -61,8 +73,12 @@ function App() {
         </nav>
         <div className="p-4 border-t border-slate-700/50">
           <div className="flex items-center gap-3 px-2">
-            <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_#22c55e]"></div>
-            <span className="text-xs text-slate-400 font-medium">All Systems Operational</span>
+            <div className={`w-2 h-2 rounded-full ${
+              apiHealthy === null ? 'bg-slate-500' : apiHealthy ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500 shadow-[0_0_8px_#ef4444]'
+            }`}></div>
+            <span className="text-xs text-slate-400 font-medium">
+              {apiHealthy === null ? 'Checking API...' : apiHealthy ? 'API Reachable' : 'API Unreachable'}
+            </span>
           </div>
         </div>
       </aside>
