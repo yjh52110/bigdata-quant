@@ -14,9 +14,6 @@ const dict = {
   'nav.infra': { zh: '基础设施', en: 'Infrastructure' },
 
   'app.subtitle': { zh: '系统控制中心', en: 'System Control Center' },
-  'app.apiReachable': { zh: '接口正常', en: 'API Reachable' },
-  'app.apiUnreachable': { zh: '接口不可达', en: 'API Unreachable' },
-  'app.apiChecking': { zh: '正在检测接口…', en: 'Checking API...' },
   'app.logout': { zh: '退出登录', en: 'Log out' },
   'app.connecting': { zh: '正在连接后端…', en: 'Connecting to backend...' },
   'app.cannotReach': { zh: '无法连接后端', en: 'Cannot reach the backend at' },

@@ -154,14 +154,6 @@ function App() {
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-3 px-2">
-            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-              apiHealthy === null ? 'bg-slate-500' : apiHealthy ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500 shadow-[0_0_8px_#ef4444]'
-            }`}></div>
-            <span className="text-xs text-slate-400 font-medium">
-              {apiHealthy === null ? t('app.apiChecking') : apiHealthy ? t('app.apiReachable') : t('app.apiUnreachable')}
-            </span>
-          </div>
           {authRequired && (
             <button
               onClick={handleLogout}
