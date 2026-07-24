@@ -72,11 +72,13 @@ async def extract_chain_data(
     HYPERSYNC_BEARER_TOKEN; raises HypersyncTokenMissing if absent instead of silently
     writing fake data.
     """
-    token = bearer_token or os.environ.get("HYPERSYNC_BEARER_TOKEN")
+    # hypersync >=1.0 renamed the credential to api_token but still accepts
+    # bearer_token, so both env var spellings are honoured here.
+    token = bearer_token or os.environ.get("HYPERSYNC_API_TOKEN") or os.environ.get("HYPERSYNC_BEARER_TOKEN")
     if not token:
         raise HypersyncTokenMissing(
-            "HYPERSYNC_BEARER_TOKEN is not set. Get a free token at "
-            "https://app.envio.dev/api-tokens and export it before ingesting real data."
+            "HYPERSYNC_API_TOKEN (or HYPERSYNC_BEARER_TOKEN) is not set. Get a free "
+            "token at https://app.envio.dev/api-tokens and export it before ingesting real data."
         )
 
     chain_key = chain_name.lower()
@@ -86,7 +88,7 @@ async def extract_chain_data(
 
     logging.info(f"Starting real Hypersync extraction: {chain_name} blocks {from_block}->{to_block} from {url}")
 
-    config = ClientConfig(url=url, bearer_token=token, max_num_retries=3)
+    config = ClientConfig(url=url, api_token=token, max_num_retries=3)
     client = HypersyncClient(config)
 
     query = Query(
