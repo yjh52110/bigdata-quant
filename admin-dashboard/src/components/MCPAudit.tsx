@@ -1,21 +1,52 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Lock } from 'lucide-react';
+import { Activity, Lock, Users, Plus, Copy } from 'lucide-react';
 import { apiFetch } from '../api';
 
 export default function MCPAudit() {
   const [logs, setLogs] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [newUser, setNewUser] = useState('');
+  const [issuedKey, setIssuedKey] = useState<{ user: string; key: string } | null>(null);
+  const [userError, setUserError] = useState<string | null>(null);
+
+  const loadUsers = () => {
+    apiFetch('/api/mcp/users').then(r => r.json()).then(d => setUsers(d.users || [])).catch(console.error);
+  };
 
   useEffect(() => {
     const load = () => {
-      apiFetch('/api/mcp/logs')
-        .then(r => r.json())
-        .then(data => setLogs(data.logs || []))
-        .catch(console.error);
+      apiFetch('/api/mcp/logs').then(r => r.json()).then(data => setLogs(data.logs || [])).catch(console.error);
+      loadUsers();
     };
     load();
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  const createUser = async () => {
+    setUserError(null);
+    try {
+      const res = await apiFetch('/api/mcp/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: newUser.trim() }),
+      });
+      const d = await res.json();
+      if (!res.ok) { setUserError(d.detail || 'Failed'); return; }
+      setIssuedKey({ user: d.user_id, key: d.api_key });
+      setNewUser('');
+      loadUsers();
+    } catch (e) { setUserError(String(e)); }
+  };
+
+  const toggleUser = async (user_id: string, disabled: boolean) => {
+    await apiFetch('/api/mcp/users/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id, disabled }),
+    });
+    loadUsers();
+  };
 
   const errorCount = logs.filter(l => l.status.includes('error') || l.status.includes('blocked')).length;
 
@@ -46,6 +77,89 @@ export default function MCPAudit() {
           ) : (
             <div className="text-4xl font-bold text-red-400">{errorCount}</div>
           )}
+        </div>
+      </div>
+
+      <div className="glass-panel p-5">
+        <h3 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+          <Users size={18} className="text-emerald-400" />
+          MCP Users ({users.length})
+        </h3>
+        <p className="text-xs text-slate-500 mb-4">
+          Each user gets their own API key, daily quota and per-minute rate limit, enforced by the MCP server.
+        </p>
+
+        <div className="flex flex-col sm:flex-row gap-3 mb-4">
+          <input
+            value={newUser}
+            onChange={e => setNewUser(e.target.value)}
+            placeholder="New user id, e.g. alice"
+            className="flex-1 px-4 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 outline-none focus:border-emerald-500"
+          />
+          <button
+            onClick={createUser}
+            disabled={!newUser.trim()}
+            className="flex items-center justify-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+          >
+            <Plus size={16} /> Issue key
+          </button>
+        </div>
+        {userError && <p className="text-red-400 text-sm mb-3">{userError}</p>}
+
+        {issuedKey && (
+          <div className="mb-4 p-3 rounded-lg bg-emerald-900/25 border border-emerald-600/40">
+            <p className="text-xs text-emerald-300 mb-2">
+              Key for <strong>{issuedKey.user}</strong> — copy it now, it can't be shown again.
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 text-xs font-mono text-emerald-200 break-all">{issuedKey.key}</code>
+              <button
+                onClick={() => navigator.clipboard?.writeText(issuedKey.key)}
+                className="p-1.5 text-emerald-300 hover:text-white hover:bg-emerald-700/40 rounded flex-shrink-0"
+                title="Copy"
+              >
+                <Copy size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse min-w-[520px]">
+            <thead>
+              <tr className="border-b border-slate-700">
+                <th className="py-2 px-3 text-sm font-semibold text-slate-400">User</th>
+                <th className="py-2 px-3 text-sm font-semibold text-slate-400">Key</th>
+                <th className="py-2 px-3 text-sm font-semibold text-slate-400">Today</th>
+                <th className="py-2 px-3 text-sm font-semibold text-slate-400">Rate</th>
+                <th className="py-2 px-3 text-sm font-semibold text-slate-400 text-right">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.length === 0 ? (
+                <tr><td colSpan={5} className="py-5 text-center text-slate-500">No MCP users yet.</td></tr>
+              ) : users.map((u, i) => (
+                <tr key={i} className="border-b border-slate-700/30 hover:bg-slate-800/40 transition-colors">
+                  <td className="py-2 px-3 text-slate-200">{u.user_id}</td>
+                  <td className="py-2 px-3 text-slate-500 font-mono text-xs">{u.api_key_masked}</td>
+                  <td className="py-2 px-3 text-slate-300 font-mono text-sm">{u.used_today}/{u.daily_quota}</td>
+                  <td className="py-2 px-3 text-slate-400 font-mono text-sm">{u.rate_per_min}/min</td>
+                  <td className="py-2 px-3 text-right">
+                    <button
+                      onClick={() => toggleUser(u.user_id, !u.disabled)}
+                      className={`text-xs px-2 py-1 rounded border transition-colors ${
+                        u.disabled
+                          ? 'bg-red-500/20 text-red-400 border-red-500/30 hover:bg-red-500/30'
+                          : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/30'
+                      }`}
+                    >
+                      {u.disabled ? 'Disabled' : 'Active'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 

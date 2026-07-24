@@ -20,6 +20,11 @@ from backend.alerting import list_alert_rules, send_test_alert, telegram_configu
 from backend.mcp_logs import read_recent_logs
 from backend.transfer_log import get_today_totals
 from backend.binance_ingestion import ingest_binance_klines
+from backend.mcp_users import (
+    list_users as list_mcp_users,
+    create_user as create_mcp_user,
+    set_disabled as set_mcp_user_disabled,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -326,6 +331,39 @@ def get_gemini_status():
 @app.get("/api/mcp/logs")
 def get_mcp_logs(limit: int = 100):
     return {"logs": read_recent_logs(limit)}
+
+
+@app.get("/api/mcp/users")
+def get_mcp_users():
+    return {"users": list_mcp_users()}
+
+
+class CreateUserRequest(BaseModel):
+    user_id: str
+    daily_quota: int = 500
+    rate_per_min: int = 20
+
+
+@app.post("/api/mcp/users")
+def add_mcp_user(req: CreateUserRequest):
+    if not req.user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id must not be empty")
+    user = create_mcp_user(req.user_id.strip(), req.daily_quota, req.rate_per_min)
+    # The only time the raw key is ever returned; it is not recoverable later.
+    return {"user_id": user.user_id, "api_key": user.api_key,
+            "daily_quota": user.daily_quota, "rate_per_min": user.rate_per_min}
+
+
+class ToggleUserRequest(BaseModel):
+    user_id: str
+    disabled: bool
+
+
+@app.post("/api/mcp/users/toggle")
+def toggle_mcp_user(req: ToggleUserRequest):
+    if not set_mcp_user_disabled(req.user_id, req.disabled):
+        raise HTTPException(status_code=404, detail=f"No such user '{req.user_id}'")
+    return {"user_id": req.user_id, "disabled": req.disabled}
 
 
 @app.get("/api/alerts")
