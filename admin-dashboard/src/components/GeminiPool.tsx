@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { KeyRound } from 'lucide-react';
-import { API_BASE_URL } from '../App';
+import { apiFetch } from '../api';
 
 export default function GeminiPool() {
   const [status, setStatus] = useState({
@@ -14,7 +14,7 @@ export default function GeminiPool() {
 
   useEffect(() => {
     const load = () => {
-      fetch(`${API_BASE_URL}/api/gemini/status`)
+      apiFetch('/api/gemini/status')
         .then(r => r.json())
         .then(data => setStatus(data))
         .catch(console.error);
@@ -25,10 +25,10 @@ export default function GeminiPool() {
   }, []);
 
   return (
-    <div className="h-full flex flex-col gap-6 animate-fade-in">
+    <div className="min-h-full flex flex-col gap-6 animate-fade-in">
       <header>
-        <h2 className="text-3xl font-bold text-white mb-2">Gemini AI Key Pool</h2>
-        <p className="text-slate-400">Real per-key rotation status (GEMINI_API_KEY / GEMINI_API_KEYS)</p>
+        <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">Gemini AI Key Pool</h2>
+        <p className="text-slate-400 text-sm sm:text-base">Real per-key rotation status (GEMINI_API_KEY / GEMINI_API_KEYS)</p>
       </header>
 
       {!status.configured && (

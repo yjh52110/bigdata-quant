@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Server, Bell, Cpu, MemoryStick, HardDrive, Send } from 'lucide-react';
-import { API_BASE_URL } from '../App';
+import { apiFetch } from '../api';
 
 export default function Infrastructure() {
   const [infra, setInfra] = useState<any>({ host_label: '', cpu: { percent: 0 }, memory: { percent: 0 }, disk: { percent: 0 } });
@@ -9,8 +9,8 @@ export default function Infrastructure() {
 
   useEffect(() => {
     const load = () => {
-      fetch(`${API_BASE_URL}/api/infrastructure`).then(r => r.json()).then(setInfra).catch(console.error);
-      fetch(`${API_BASE_URL}/api/alerts`).then(r => r.json()).then(setAlerts).catch(console.error);
+      apiFetch('/api/infrastructure').then(r => r.json()).then(setInfra).catch(console.error);
+      apiFetch('/api/alerts').then(r => r.json()).then(setAlerts).catch(console.error);
     };
     load();
     const interval = setInterval(load, 10000);
@@ -20,7 +20,7 @@ export default function Infrastructure() {
   const sendTest = async () => {
     setTestResult('Sending...');
     try {
-      const res = await fetch(`${API_BASE_URL}/api/alerts/test`, { method: 'POST' });
+      const res = await apiFetch('/api/alerts/test', { method: 'POST' });
       const data = await res.json();
       setTestResult(res.ok ? 'Sent!' : (data.detail || 'Failed'));
     } catch {
@@ -29,18 +29,18 @@ export default function Infrastructure() {
   };
 
   return (
-    <div className="h-full flex flex-col gap-6 animate-fade-in">
+    <div className="min-h-full flex flex-col gap-6 animate-fade-in">
       <header>
-        <h2 className="text-3xl font-bold text-white mb-2">Infrastructure & Alerts</h2>
-        <p className="text-slate-400">Host Monitoring and Alert Routing</p>
+        <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">Infrastructure & Alerts</h2>
+        <p className="text-slate-400 text-sm sm:text-base">Host Monitoring and Alert Routing</p>
       </header>
 
       <div className="glass-panel p-5">
-        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-          <Server size={18} className="text-blue-400" />
-          {infra.host_label || 'Compute Host'}
+        <h3 className="text-base sm:text-lg font-semibold text-white mb-4 flex items-start gap-2">
+          <Server size={18} className="text-blue-400 flex-shrink-0 mt-1" />
+          <span className="break-words">{infra.host_label || 'Compute Host'}</span>
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
           <div>
             <div className="flex items-center gap-1 text-slate-400 mb-1"><Cpu size={14} /> CPU Util</div>
             <div className="text-2xl text-white font-bold">{infra.cpu?.percent ?? 0}%</div>
@@ -61,12 +61,12 @@ export default function Infrastructure() {
       </div>
 
       <div className="flex-1 glass-panel p-5 flex flex-col">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
           <h3 className="text-lg font-semibold text-white flex items-center gap-2">
             <Bell className="text-blue-400" size={20} />
             Alert Routing Rules
           </h3>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <span className={`text-xs px-2 py-1 rounded ${alerts.telegram_configured ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-400'}`}>
               Telegram {alerts.telegram_configured ? 'configured' : 'not configured'}
             </span>
@@ -81,7 +81,7 @@ export default function Infrastructure() {
         </div>
         {testResult && <p className="text-xs text-slate-400 mb-3">{testResult}</p>}
         <div className="overflow-x-auto flex-1">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full text-left border-collapse min-w-[420px]">
             <thead>
               <tr className="border-b border-slate-700">
                 <th className="py-3 px-4 text-sm font-semibold text-slate-400">Trigger Condition</th>

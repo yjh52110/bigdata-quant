@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { Activity, Database, Clock, Zap } from 'lucide-react';
-import { API_BASE_URL } from '../App';
+import { apiFetch } from '../api';
 
 export default function Overview() {
   const [stats, setStats] = useState({
@@ -17,8 +17,8 @@ export default function Overview() {
 
   useEffect(() => {
     const load = () => {
-      fetch(`${API_BASE_URL}/api/overview`).then(r => r.json()).then(setStats).catch(console.error);
-      fetch(`${API_BASE_URL}/api/overview/traffic`).then(r => r.json()).then(setTraffic).catch(console.error);
+      apiFetch('/api/overview').then(r => r.json()).then(setStats).catch(console.error);
+      apiFetch('/api/overview/traffic').then(r => r.json()).then(setTraffic).catch(console.error);
     };
     load();
     const interval = setInterval(load, 5000);
@@ -28,16 +28,14 @@ export default function Overview() {
   const chartData = traffic.recent.map((r, i) => ({ i, latency: r.latency_ms }));
 
   return (
-    <div className="h-full flex flex-col gap-6 animate-fade-in">
-      <header className="flex justify-between items-end">
-        <div>
-          <h2 className="text-3xl font-bold text-white mb-2">System Overview</h2>
-          <p className="text-slate-400">Real-time metrics from the running backend process</p>
-        </div>
+    <div className="min-h-full flex flex-col gap-6 animate-fade-in">
+      <header>
+        <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">System Overview</h2>
+        <p className="text-slate-400 text-sm sm:text-base">Real-time metrics from the running backend process</p>
       </header>
 
       {/* Top Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {[
           { title: "Active Accounts", value: stats.activeAccounts, icon: Activity, color: "text-blue-400", bg: "bg-blue-500/20" },
           { title: "Data Size", value: stats.totalDataSize, icon: Database, color: "text-emerald-400", bg: "bg-emerald-500/20" },

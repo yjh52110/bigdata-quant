@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Terminal, Table2 } from 'lucide-react';
-import { API_BASE_URL } from '../App';
+import { apiFetch } from '../api';
 
 export default function DuckDBEngine() {
   const [tables, setTables] = useState<string[]>([]);
@@ -10,7 +10,7 @@ export default function DuckDBEngine() {
   const [running, setRunning] = useState(false);
 
   const loadTables = () => {
-    fetch(`${API_BASE_URL}/api/duckdb/tables`)
+    apiFetch('/api/duckdb/tables')
       .then(r => r.json())
       .then(data => setTables(data.tables || []))
       .catch(console.error);
@@ -26,7 +26,7 @@ export default function DuckDBEngine() {
     setRunning(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/duckdb/query`, {
+      const res = await apiFetch('/api/duckdb/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query })
@@ -47,10 +47,10 @@ export default function DuckDBEngine() {
   };
 
   return (
-    <div className="h-full flex flex-col gap-6 animate-fade-in">
+    <div className="min-h-full flex flex-col gap-6 animate-fade-in">
       <header>
-        <h2 className="text-3xl font-bold text-white mb-2">DuckDB Compute Engine</h2>
-        <p className="text-slate-400">In-memory analytical queries over ingested Parquet data (read-only SELECT only)</p>
+        <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">DuckDB Compute Engine</h2>
+        <p className="text-slate-400 text-sm sm:text-base">In-memory analytical queries over ingested Parquet data (read-only SELECT only)</p>
       </header>
 
       <div className="glass-panel p-5">
@@ -88,12 +88,12 @@ export default function DuckDBEngine() {
             onChange={e => setQuery(e.target.value)}
           />
         </div>
-        <div className="bg-slate-800/80 px-4 py-3 border-t border-slate-700 flex justify-between items-center">
-          <span className="text-sm text-slate-400">Available: {tables.join(', ') || 'none'}</span>
+        <div className="bg-slate-800/80 px-4 py-3 border-t border-slate-700 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
+          <span className="text-sm text-slate-400 truncate">Available: {tables.join(', ') || 'none'}</span>
           <button
             onClick={handleExecute}
             disabled={running}
-            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white font-medium rounded transition-colors shadow-lg shadow-blue-500/20 text-sm"
+            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white font-medium rounded transition-colors shadow-lg shadow-blue-500/20 text-sm flex-shrink-0"
           >
             {running ? 'Running...' : 'Execute Query'}
           </button>
@@ -108,7 +108,7 @@ export default function DuckDBEngine() {
                 <p className="text-xs text-emerald-400 mb-2 font-mono">
                   {result.row_count} row(s) in {result.duration_ms}ms
                 </p>
-                <table className="w-full text-left text-xs font-mono">
+                <table className="w-full text-left text-xs font-mono min-w-[320px]">
                   <thead>
                     <tr>
                       {result.columns.map((c: string, i: number) => (

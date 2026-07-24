@@ -22,14 +22,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 app = FastAPI(title="ChainQuantPlatform Admin API")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 QUANT_API_KEY = os.environ.get("QUANT_API_KEY")
 
 
@@ -62,6 +54,19 @@ async def traffic_tracker(request: Request, call_next):
     request_log.append({"t": time.time(), "path": request.url.path, "latency_ms": round(duration_ms, 1)})
     return response
 
+
+# Added LAST so it ends up OUTERMOST in Starlette's middleware stack (add_middleware
+# inserts at position 0). This matters: api_key_guard returns 401 early without
+# calling the next handler, so if CORS sat inside it the 401 would carry no CORS
+# headers and the browser would surface it as an opaque network failure ("could
+# not reach backend") instead of a clean "incorrect password".
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 os.makedirs(DATA_DIR, exist_ok=True)
 

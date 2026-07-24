@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Play, Pause, RefreshCw } from 'lucide-react';
-import { API_BASE_URL } from '../App';
+import { apiFetch } from '../api';
 
 const fmtBytes = (b: number) => {
   if (!b) return '0 GB';
@@ -13,7 +13,7 @@ export default function GoogleAccounts() {
   const [accountData, setAccountData] = useState<any>({ poolStatus: {}, accounts: [], transferToday: null });
 
   const load = () => {
-    fetch(`${API_BASE_URL}/api/accounts`)
+    apiFetch('/api/accounts')
       .then(r => r.json())
       .then(data => setAccountData(data))
       .catch(console.error);
@@ -33,13 +33,13 @@ export default function GoogleAccounts() {
   const downloadPct = transfer ? Math.min(100, (transfer.download_bytes / transfer.download_limit_bytes) * 100) : 0;
 
   return (
-    <div className="h-full flex flex-col gap-6 animate-fade-in">
-      <header className="flex justify-between items-end">
+    <div className="min-h-full flex flex-col gap-6 animate-fade-in">
+      <header className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-3">
         <div>
-          <h2 className="text-3xl font-bold text-white mb-2">Google Account Pool</h2>
-          <p className="text-slate-400">{poolStatus.total_accounts ?? 0} accounts &middot; {(poolStatus.total_capacity_tb ?? 0).toFixed(2)} TB total capacity</p>
+          <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">Google Account Pool</h2>
+          <p className="text-slate-400 text-sm sm:text-base">{poolStatus.total_accounts ?? 0} accounts &middot; {(poolStatus.total_capacity_tb ?? 0).toFixed(2)} TB total capacity</p>
         </div>
-        <button onClick={load} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors shadow-lg shadow-blue-500/20">
+        <button onClick={load} className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors shadow-lg shadow-blue-500/20 flex-shrink-0">
           <RefreshCw size={16} />
           <span>Sync Status</span>
         </button>
@@ -81,7 +81,7 @@ export default function GoogleAccounts() {
         <div className="lg:col-span-2 glass-panel p-5">
           <h3 className="text-lg font-semibold text-white mb-4">Rclone Union Account Health</h3>
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full text-left border-collapse min-w-[620px]">
               <thead>
                 <tr className="border-b border-slate-700">
                   <th className="py-3 px-4 text-sm font-semibold text-slate-400">Account ID</th>
