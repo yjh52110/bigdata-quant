@@ -128,6 +128,14 @@ vendor/                    vendored Drive-pooling projects (not yet integrated)
 python3 -m pytest backend/tests -q
 ```
 
+## API integration reference
+
+`docs/接入参考.md` records, per external service, the real endpoints, auth,
+verified limits and the gotchas hit during integration (Google's retired OOB
+OAuth flow, Binance's microsecond timestamps, the absence of any quota-query
+endpoint on Gemini/Colab/Drive, and the measured 832 MB/day that makes full
+chain mirroring impractical).
+
 ## Known gaps
 
 - No strategy mining or backtest engine; the dashboard leaderboard is labelled
