@@ -517,27 +517,21 @@ def test_refresh_only_polls_jobs_that_are_still_running(monkeypatch, tmp_path):
     assert {j["ref"]: j["status"] for j in jobs} == {"u/done": "COMPLETE", "u/live": "RUNNING"}
 
 
-def test_drive_access_separates_measured_from_inferred():
-    """Every row is now measured in a live runtime -- Colab's two directly, and
-    Kaggle's once a drivecheck kernel actually ran. The point of the test is
-    that `verified` tracks whether a measurement happened, so a row may only
-    claim it after one did."""
+def test_drive_access_is_rest_only_and_measured():
+    """Both platforms reach Drive the same way: REST with an OAuth token. The
+    FUSE rows were dropped once the question was settled, but the reason has to
+    survive in the notes -- otherwise the next person reaches for drive.mount()
+    again and loses an afternoon to a popup that never appears."""
     from backend.kaggle_control import DRIVE_ACCESS
-    by = {(d["platform"], d["method"]): d for d in DRIVE_ACCESS}
-    assert by[("Colab", "Drive REST API")] == {
-        **by[("Colab", "Drive REST API")], "works": True, "verified": True}
-    assert "33.8ms" in by[("Colab", "Drive REST API")]["note"]
-    assert by[("Colab", "FUSE 挂载")]["works"] is False
-    assert "mount failed" in by[("Colab", "FUSE 挂载")]["note"]
-    # Kaggle has no FUSE at all -- a different reason from Colab's, so the note
-    # must not be copied across.
-    assert "KeyError" in by[("Kaggle", "FUSE 挂载")]["note"]
-    kaggle_rest = by[("Kaggle", "Drive REST API")]
-    assert kaggle_rest["verified"] is True          # a drivecheck kernel ran
-    assert kaggle_rest["works"] is True             # and, once verified, egress was open
-    assert all(d["verified"] for d in DRIVE_ACCESS)
-    # Neither platform may claim FUSE works: both were measured to fail.
-    assert not any(d["works"] for d in DRIVE_ACCESS if "FUSE" in d["method"])
+    assert len(DRIVE_ACCESS) == 2
+    assert all(d["method"] == "Drive REST API" for d in DRIVE_ACCESS)
+    assert all(d["works"] and d["verified"] for d in DRIVE_ACCESS)
+
+    by = {d["platform"]: d for d in DRIVE_ACCESS}
+    assert "33.8ms" in by["Colab"]["note"]
+    assert "mount failed" in by["Colab"]["note"]      # why FUSE is not an option
+    assert "83.0ms" in by["Kaggle"]["note"]
+    assert "没有挂载方案" in by["Kaggle"]["note"]
 
 
 def test_drivecheck_job_probes_all_four_unknowns():
@@ -841,14 +835,14 @@ def test_panel_records_that_kaggle_internet_needs_phone_verification():
     assert "DNS 不通" in state and "324.5" in state
 
 
-def test_the_wrong_google_colab_claim_was_corrected():
-    """An earlier row claimed importing google.colab raises in Kaggle. Measured
-    true. Only drive.mount() is unusable."""
-    from backend.kaggle_control import DRIVE_ACCESS
-    fuse = next(d for d in DRIVE_ACCESS
-                if d["platform"] == "Kaggle" and "FUSE" in d["method"])
-    assert "能 import" in fuse["note"]
-    assert "KeyError" not in fuse["note"].split("此前")[0]
+def test_no_row_claims_fuse_is_usable():
+    """Measured on both platforms: unattended FUSE mounting does not work. The
+    module-level comment records it; no row may contradict that."""
+    import inspect
+    import backend.kaggle_control as kc
+    src = inspect.getsource(kc)
+    assert "drive.mount()" in src and "colabtools#4182" in src
+    assert not any("FUSE" in d["method"] for d in kc.DRIVE_ACCESS)
 
 
 def test_kaggle_drive_reachability_records_both_sides_of_verification():
@@ -857,8 +851,7 @@ def test_kaggle_drive_reachability_records_both_sides_of_verification():
     the note is what makes the cause attributable to verification rather than
     to this project's code."""
     from backend.kaggle_control import DRIVE_ACCESS, FREE_TIER
-    rest = next(d for d in DRIVE_ACCESS
-                if d["platform"] == "Kaggle" and "REST" in d["method"])
+    rest = next(d for d in DRIVE_ACCESS if d["platform"] == "Kaggle")
     assert rest["works"] is True and rest["verified"] is True
     assert "401" in rest["note"] and "手机验证" in rest["note"]
 

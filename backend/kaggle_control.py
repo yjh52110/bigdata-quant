@@ -101,22 +101,20 @@ FREE_TIER = [
      "note": "kaggle.com 文档原文 Once the account is verified to have an active Colab subscription, you will be granted additional GPU hours。你当前 0 计算单元即无订阅，故不适用"},
 ]
 
-# How each platform can and cannot reach Drive. The Colab rows are measured
-# (see backend/colab_control.py); the Kaggle REST row is inferred from
-# enable_internet allowing arbitrary egress and is marked unverified until a
-# token lets the drivecheck job run.
+# How each platform reaches Drive. Both go through the REST API with an OAuth
+# token -- there is no mounted filesystem involved in either case.
+#
+# The FUSE alternative was measured and dropped, and the reason is folded into
+# the notes rather than kept as its own rows: drive.mount() needs the notebook's
+# consent popup so it cannot run unattended (colabtools#4182 is still open), and
+# Kaggle has no mount at all. Nothing in this project should reach for it.
 DRIVE_ACCESS = [
-    {"platform": "Colab", "method": "FUSE 挂载", "works": False, "verified": True,
-     "note": "drive.mount() / colab drivemount 需网页端授权弹窗，headless 实测报 ValueError: mount failed。官方仓库 colabtools#4182「让 mount 支持 Secrets」至今未实现"},
     {"platform": "Colab", "method": "Drive REST API", "works": True, "verified": True,
-     "note": "实测 33.8ms 返回 401 missing authentication credential——链路通、仅缺令牌。本项目走的正是这条"},
-    {"platform": "Kaggle", "method": "FUSE 挂载", "works": False, "verified": True,
-     "note": "Kaggle 没有挂载方案。注：google.colab 模块本身在 Kaggle 里能 import（实测 true），"
-             "不能用的是 drive.mount()——此前本表写成「import 就 KeyError」，是错的，已按实测更正"},
+     "note": "实测 33.8ms 返回 401 missing authentication credential——链路通、仅缺令牌。"
+             "不要改用 drive.mount()：它需要网页端授权弹窗，headless 下报 ValueError: mount failed"},
     {"platform": "Kaggle", "method": "Drive REST API", "works": True, "verified": True,
-     "note": "手机验证后实测通：kernel 内 Drive 接口 HTTP 401 / 83.0ms（401 是无令牌时的健康应答，"
-             "证明链路通、仅缺令牌），OAuth 令牌端点 19.7ms 可达。验证前同一探针连 DNS 都不通，"
-             "所以这条的前提是账号已完成手机验证"},
+     "note": "手机验证后实测通：Drive 接口 HTTP 401 / 83.0ms，OAuth 令牌端点 19.7ms 可达。"
+             "验证前同一探针连 DNS 都不通。Kaggle 没有挂载方案，只有这条路"},
 ]
 
 DOC_LINKS = [
