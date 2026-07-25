@@ -46,6 +46,11 @@ DOCUMENTED_LIMITS = [
      "note": "原文 resources are not guaranteed and not unlimited, usage limits sometimes fluctuate"},
     {"item": "多账号扩额度", "value": "明确禁止",
      "note": "禁止清单原文 using multiple accounts to work around access or resource usage restrictions"},
+    # Verified from the CLI's own command list: `pay` is described as "Open the
+    # Colab signup page to manage compute units", so paid tiers do have a
+    # balance -- but none of the 20 commands can print it.
+    {"item": "付费档 compute units", "value": "CLI 读不到",
+     "note": "CLI 只有 pay 命令（原文 Open the Colab signup page to manage compute units），全部命令中无任何一条能返回余额，只能在 Colab 网页端查看"},
 ]
 
 DOC_LINKS = [
@@ -53,6 +58,7 @@ DOC_LINKS = [
     {"title": "官方 CLI 仓库", "url": "https://github.com/googlecolab/google-colab-cli"},
     {"title": "官方 MCP 服务器", "url": "https://github.com/googlecolab/colab-mcp"},
     {"title": "google.colab Python API 源码", "url": "https://github.com/googlecolab/colabtools"},
+    {"title": "Colab 套餐与 compute units（余额在此查看）", "url": "https://colab.research.google.com/signup"},
 ]
 
 
