@@ -211,6 +211,26 @@ elif kind == "uploadbench":
     result["generate_seconds"] = round(time.time() - t0, 2)
     result["payload_mb"] = mb
 
+elif kind == "downloadbench":
+    # Read-back speed from Drive into the runtime. This is what sets backtest
+    # iteration time, and it is a different path from the GCS download measured
+    # earlier (324.5 MB/s) -- Drive is not GCS.
+    import drive_rest
+    tok = PARAMS.get("drive_access_token")
+    name = PARAMS.get("file_name", "bench_200mb.bin")
+    folder = PARAMS.get("drive_folder", "chainquant")
+    try:
+        fid = drive_rest.ensure_path(tok, f"{folder}/uploadbench")
+        found = drive_rest.find_file(tok, name, fid)
+        if not found:
+            result["error"] = f"{name} not found under {folder}/uploadbench"
+        else:
+            r = drive_rest.download(tok, found["id"], os.path.join(OUT, "readback.bin"))
+            result["download_from_drive"] = r
+            os.remove(os.path.join(OUT, "readback.bin"))
+    except Exception as e:
+        result["error"] = str(e)[:300]
+
 elif kind == "drivecheck":
     # Answers "can a Kaggle kernel reach our Drive?" with measurements rather
     # than assumption. Kaggle has no FUSE mount at all (google.colab.drive

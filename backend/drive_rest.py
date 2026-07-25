@@ -204,6 +204,43 @@ def upload(token: str, local_path: str, parent_id: str,
     raise DriveError("upload loop ended without a completion response")
 
 
+def find_file(token: str, name: str, parent: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    safe = name.replace("\\", "\\\\").replace("'", "\\'")
+    q = f"name='{safe}' and trashed=false"
+    if parent:
+        q += f" and '{parent}' in parents"
+    url = f"{API}/files?q={urllib.parse.quote(q)}&fields=files(id,name,size)&pageSize=10"
+    files = (_json_request(url, headers=_auth(token)) or {}).get("files") or []
+    return files[0] if files else None
+
+
+def download(token: str, file_id: str, dest_path: str) -> Dict[str, Any]:
+    """Streams one file down, reporting throughput.
+
+    Uses alt=media on the files endpoint; the drive.file scope covers reading
+    back anything this client wrote.
+    """
+    url = f"{API}/files/{file_id}?alt=media"
+    req = urllib.request.Request(url, headers=_auth(token))
+    started = time.time()
+    total = 0
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r, open(dest_path, "wb") as f:
+            while True:
+                chunk = r.read(CHUNK)
+                if not chunk:
+                    break
+                f.write(chunk)
+                total += len(chunk)
+    except urllib.error.HTTPError as e:
+        raise DriveError(f"download failed: HTTP {e.code} {e.read().decode(errors='ignore')[:200]}")
+    except urllib.error.URLError as e:
+        raise DriveError(f"download failed: {getattr(e, 'reason', e)}")
+    elapsed = max(1e-6, time.time() - started)
+    return {"bytes": total, "seconds": round(elapsed, 2),
+            "mb_per_s": round(total / 1024 ** 2 / elapsed, 2)}
+
+
 def upload_tree(token: str, local_dir: str, drive_path: str) -> Dict[str, Any]:
     """Mirrors a local directory into Drive, preserving relative structure."""
     root_id = ensure_path(token, drive_path)
