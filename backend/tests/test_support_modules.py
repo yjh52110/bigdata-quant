@@ -512,3 +512,39 @@ def test_refresh_only_polls_jobs_that_are_still_running(monkeypatch, tmp_path):
     jobs = kd.refresh_jobs()
     assert polled == ["u/live"]
     assert {j["ref"]: j["status"] for j in jobs} == {"u/done": "COMPLETE", "u/live": "RUNNING"}
+
+
+def test_drive_access_separates_measured_from_inferred():
+    """Colab's two rows were measured in a live runtime; Kaggle's REST row is
+    inferred from enable_internet and must stay flagged unverified until a
+    drivecheck job actually runs, so the panel can't overstate what we know."""
+    from backend.kaggle_control import DRIVE_ACCESS
+    by = {(d["platform"], d["method"]): d for d in DRIVE_ACCESS}
+    assert by[("Colab", "Drive REST API")] == {
+        **by[("Colab", "Drive REST API")], "works": True, "verified": True}
+    assert "33.8ms" in by[("Colab", "Drive REST API")]["note"]
+    assert by[("Colab", "FUSE 挂载")]["works"] is False
+    assert "mount failed" in by[("Colab", "FUSE 挂载")]["note"]
+    # Kaggle has no FUSE at all -- a different reason from Colab's, so the note
+    # must not be copied across.
+    assert "KeyError" in by[("Kaggle", "FUSE 挂载")]["note"]
+    assert by[("Kaggle", "Drive REST API")]["verified"] is False
+
+
+def test_drivecheck_job_probes_all_four_unknowns():
+    """One push has to settle: is egress open, does the Drive API answer, can a
+    secret be injected, and how fast is Google's network from Kaggle."""
+    from backend.kaggle_dispatch import render_script
+    src = render_script({"kind": "drivecheck"})
+    compile(src, "job.py", "exec")
+    for probe in ("drive_api", "oauth_token_endpoint", "kaggle_secrets",
+                  "google_colab_module", "gcs_download_MBps"):
+        assert probe in src, probe
+    # 401 without a token is the healthy answer and must not be treated as failure.
+    assert "HTTPError" in src and "401" in src
+
+
+def test_drivecheck_needs_no_parameters():
+    from backend.kaggle_dispatch import render_script
+    src = render_script({"kind": "drivecheck"})
+    assert '"kind": "drivecheck"' in src

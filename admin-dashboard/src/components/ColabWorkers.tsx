@@ -19,7 +19,7 @@ export default function ColabWorkers() {
   const [kaggle, setKaggle] = useState<any>(null);
   const [kgJobs, setKgJobs] = useState<any[]>([]);
   const [kgUser, setKgUser] = useState('');
-  const [kgKind, setKgKind] = useState<'aws' | 'binance'>('aws');
+  const [kgKind, setKgKind] = useState<'aws' | 'binance' | 'drivecheck'>('aws');
   const [kgChain, setKgChain] = useState('eth');
   const [kgTable, setKgTable] = useState('blocks');
   const [kgDays, setKgDays] = useState('2024-01-15');
@@ -38,7 +38,9 @@ export default function ColabWorkers() {
     setKgBusy(true); setKgMsg(null);
     // Slug must be unique per push or Kaggle versions the same kernel; index by
     // job shape so repeat runs of the same target are recognisable in the list.
-    const stamp = kgKind === 'aws' ? `${kgChain}-${kgTable}` : `${kgSymbol.toLowerCase()}-${kgInterval}`;
+    const stamp = kgKind === 'aws' ? `${kgChain}-${kgTable}`
+      : kgKind === 'binance' ? `${kgSymbol.toLowerCase()}-${kgInterval}`
+      : 'probe';
     try {
       const res = await apiFetch('/api/kaggle/dispatch', {
         method: 'POST',
@@ -498,18 +500,20 @@ export default function ColabWorkers() {
                 placeholder={t('kg.usernamePlaceholder')}
                 className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-sm text-slate-200 font-mono" />
               <div className="flex gap-2">
-                {(['aws', 'binance'] as const).map(k => (
+                {(['aws', 'binance', 'drivecheck'] as const).map(k => (
                   <button key={k} onClick={() => setKgKind(k)}
                     className={`text-xs px-3 min-h-[44px] sm:min-h-0 sm:py-2 rounded border ${kgKind === k
                       ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
                       : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
-                    {k === 'aws' ? t('kg.kindAws') : t('kg.kindBinance')}
+                    {k === 'aws' ? t('kg.kindAws') : k === 'binance' ? t('kg.kindBinance') : t('kg.kindDriveCheck')}
                   </button>
                 ))}
               </div>
             </div>
 
-            {kgKind === 'aws' ? (
+            {kgKind === 'drivecheck' ? (
+              <p className="text-xs text-slate-500 mb-3">{t('kg.driveCheckNote')}</p>
+            ) : kgKind === 'aws' ? (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
                 <input value={kgChain} onChange={e => setKgChain(e.target.value)} placeholder="eth / btc"
                   className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-sm text-slate-200 font-mono" />
@@ -589,6 +593,30 @@ export default function ColabWorkers() {
                 },
               },
               { key: 'note', header: t('cw.colNote'), cellClass: 'text-slate-500 text-xs break-words', render: (x: any) => x.note },
+            ]}
+          />
+
+          <h4 className="text-sm font-semibold text-slate-300 mt-5 mb-2">{t('kg.driveTitle')}</h4>
+          <ResponsiveTable
+            rows={kaggle.drive_access || []}
+            empty="—"
+            columns={[
+              { key: 'p', header: t('kg.colPlatform'), cellClass: 'text-slate-200 text-sm', render: (x: any) => x.platform },
+              { key: 'm', header: t('kg.colMethod'), cellClass: 'text-slate-300 text-sm', render: (x: any) => x.method },
+              {
+                key: 'w', header: t('kg.colWorks'),
+                render: (x: any) => (
+                  <span className="inline-flex flex-col items-end sm:items-start gap-1">
+                    <span className={`text-xs px-2 py-1 rounded ${x.works ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+                      {x.works ? t('kg.worksYes') : t('kg.worksNo')}
+                    </span>
+                    <span className={`text-xs ${x.verified ? 'text-slate-500' : 'text-amber-400'}`}>
+                      {x.verified ? t('kg.measured') : t('kg.unverified')}
+                    </span>
+                  </span>
+                ),
+              },
+              { key: 'n', header: t('cw.colNote'), cellClass: 'text-slate-500 text-xs break-words', render: (x: any) => x.note },
             ]}
           />
 

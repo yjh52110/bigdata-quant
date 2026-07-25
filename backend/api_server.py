@@ -579,6 +579,9 @@ def kaggle_dispatch_job(req: KaggleDispatchRequest):
         if not req.days:
             raise HTTPException(status_code=400, detail="days must not be empty for an aws job")
         params = {"kind": "aws", "chain": req.chain, "table": req.table, "days": req.days}
+    elif req.kind == "drivecheck":
+        # No parameters: it only measures reachability from inside the kernel.
+        params = {"kind": "drivecheck"}
     elif req.kind == "binance":
         if not req.months:
             raise HTTPException(status_code=400, detail="months must not be empty for a binance job")

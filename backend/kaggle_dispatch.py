@@ -170,6 +170,58 @@ elif kind == "binance":
         written.append(ym); rows += df.height
     result.update({"months_written": written, "rows": rows})
 
+elif kind == "drivecheck":
+    # Answers "can a Kaggle kernel reach our Drive?" with measurements rather
+    # than assumption. Kaggle has no FUSE mount at all (google.colab.drive
+    # raises KeyError here), so the REST path is the only one that can work --
+    # this proves whether it does, and whether a token can be injected.
+    import urllib.request, urllib.error, socket
+    checks = {}
+
+    def probe(name, url):
+        t0 = time.time()
+        try:
+            urllib.request.urlopen(url, timeout=20)
+            checks[name] = {"status": 200, "ms": round((time.time() - t0) * 1000, 1)}
+        except urllib.error.HTTPError as e:
+            # 401 is the expected, healthy answer without a token: it proves the
+            # request reached Google and was understood.
+            checks[name] = {"status": e.code, "ms": round((time.time() - t0) * 1000, 1),
+                            "body": e.read().decode(errors="ignore")[:160]}
+        except Exception as e:
+            checks[name] = {"error": str(e)[:200]}
+
+    probe("drive_api", "https://www.googleapis.com/drive/v3/about?fields=storageQuota")
+    probe("oauth_token_endpoint", "https://oauth2.googleapis.com/token")
+    checks["egress_open"] = any(c.get("status") for c in checks.values())
+
+    # Is the documented secret-injection mechanism actually present?
+    try:
+        from kaggle_secrets import UserSecretsClient
+        checks["kaggle_secrets"] = {"available": True,
+                                    "methods": [m for m in dir(UserSecretsClient)
+                                                if not m.startswith("_")]}
+    except Exception as e:
+        checks["kaggle_secrets"] = {"available": False, "error": str(e)[:200]}
+
+    # Is Colab's mount module present here at all? Expected: no.
+    try:
+        import google.colab  # noqa: F401
+        checks["google_colab_module"] = True
+    except Exception as e:
+        checks["google_colab_module"] = f"absent ({type(e).__name__})"
+
+    # Throughput to Google's own network, for comparison with Colab's 185.9 MB/s.
+    t0 = time.time()
+    r = sh("curl", "-s", "-o", "/dev/null", "-w", "%{speed_download}",
+           "https://storage.googleapis.com/gcp-public-data-landsat/index.csv.gz", timeout=180)
+    try:
+        checks["gcs_download_MBps"] = round(float(r.stdout.strip()) / 1024 / 1024, 1)
+    except Exception:
+        checks["gcs_download_MBps"] = None
+
+    result["checks"] = checks
+
 else:
     result["error"] = f"unknown kind: {kind}"
 

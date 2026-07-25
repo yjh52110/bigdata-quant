@@ -84,6 +84,21 @@ FREE_TIER = [
      "note": "kaggle.com 文档原文 Once the account is verified to have an active Colab subscription, you will be granted additional GPU hours。你当前 0 计算单元即无订阅，故不适用"},
 ]
 
+# How each platform can and cannot reach Drive. The Colab rows are measured
+# (see backend/colab_control.py); the Kaggle REST row is inferred from
+# enable_internet allowing arbitrary egress and is marked unverified until a
+# token lets the drivecheck job run.
+DRIVE_ACCESS = [
+    {"platform": "Colab", "method": "FUSE 挂载", "works": False, "verified": True,
+     "note": "drive.mount() / colab drivemount 需网页端授权弹窗，headless 实测报 ValueError: mount failed。官方仓库 colabtools#4182「让 mount 支持 Secrets」至今未实现"},
+    {"platform": "Colab", "method": "Drive REST API", "works": True, "verified": True,
+     "note": "实测 33.8ms 返回 401 missing authentication credential——链路通、仅缺令牌。本项目走的正是这条"},
+    {"platform": "Kaggle", "method": "FUSE 挂载", "works": False, "verified": True,
+     "note": "Kaggle 根本没有这个功能：google.colab.drive 是 Colab 专有模块，在 Kaggle 里直接 KeyError"},
+    {"platform": "Kaggle", "method": "Drive REST API", "works": True, "verified": False,
+     "note": "enable_internet 开启后允许任意出网，凭证经 Kaggle Secrets 注入。尚未实测——放入令牌后派发一次 drivecheck 任务即可验证并测速"},
+]
+
 DOC_LINKS = [
     {"title": "官方 CLI 仓库", "url": "https://github.com/Kaggle/kaggle-cli"},
     {"title": "kernel-metadata.json 规范", "url": "https://github.com/Kaggle/kaggle-cli/blob/main/docs/kernels_metadata.md"},
@@ -200,6 +215,7 @@ def overview() -> Dict[str, Any]:
         **quota(),
         "capabilities": CAPABILITIES,
         "free_tier": FREE_TIER,
+        "drive_access": DRIVE_ACCESS,
         "free_tier_note": ("以下为 2026-07 联网检索所得，逐条标注来源：official 表示 kaggle.com "
                            "文档或官方员工帖，community 表示多个第三方来源一致，conflicting 表示各来源不一致。"
                            "放入令牌后，kaggle quota 的实时读数优先于这张表。"),
