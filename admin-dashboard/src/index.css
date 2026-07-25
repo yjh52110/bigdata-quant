@@ -19,4 +19,6 @@
   .glass-panel {
     @apply bg-slate-800/60 backdrop-blur-md border border-slate-700/50 rounded-2xl shadow-lg;
   }
+
 }
+

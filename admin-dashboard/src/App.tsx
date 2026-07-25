@@ -172,9 +172,13 @@ function App() {
       <main className="flex-1 overflow-y-auto p-2 sm:p-4 lg:pl-0 w-full min-w-0">
         <div className="h-full glass-panel overflow-y-auto">
           <div className="p-4 sm:p-6 lg:p-8 h-full">
+            {/* Floated rather than stacked so the page's own <h2> flows onto the
+                same line -- each module renders its own title, so this is the only
+                way to share a row with all of them without touching all eight. */}
             <button
-              className="lg:hidden mb-4 w-11 h-11 flex items-center justify-center rounded-lg bg-slate-800 border border-slate-700 text-slate-300"
+              className="lg:hidden float-left mr-3 w-11 h-11 flex items-center justify-center rounded-lg bg-slate-800 border border-slate-700 text-slate-300"
               onClick={() => setSidebarOpen(true)}
+              aria-label={t('app.openMenu')}
             >
               <Menu size={20} />
             </button>
