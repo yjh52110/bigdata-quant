@@ -1026,3 +1026,95 @@ def test_redaction_matches_by_substring_not_exact_key():
                    "chain": "eth"})
     assert "x" * 40 not in str(out) and "hunter2" not in str(out)
     assert out["chain"] == "eth"
+
+
+# --------------------------------------------------------------------------
+# drive_store: the Drive-side storage convention
+# --------------------------------------------------------------------------
+def test_dataset_path_and_view_name_agree_with_duckdb_engine():
+    """duckdb_engine derives a view name from the leading directory plus every
+    key=value value. If drive_store disagreed, the catalog and the dashboard
+    would refer to the same data by different names."""
+    from backend.drive_store import dataset_path, view_name_for, L2
+    p = dataset_path(L2, name="addr_flow_1d", date="2024-01")
+    assert p == "chainquant/L2_features/name=addr_flow_1d/date=2024-01"
+    assert view_name_for(p) == "features_addr_flow_1d_2024_01"
+
+
+def test_partition_values_that_would_break_a_path_are_rejected():
+    """A slash or a space in a value would either split the path or produce a
+    view name that needs quoting everywhere."""
+    from backend.drive_store import dataset_path, StoreError, L1
+    for bad in ("a/b", "has space", "", "-leading-dash"):
+        with pytest.raises(StoreError):
+            dataset_path(L1, symbol=bad)
+    with pytest.raises(StoreError, match="lower_snake_case"):
+        dataset_path(L1, **{"Symbol": "BTCUSDT"})
+    with pytest.raises(StoreError, match="layer"):
+        dataset_path("L9_nope", symbol="BTCUSDT")
+
+
+def test_file_planning_warns_below_the_measured_floor():
+    """5.9 MB uploaded at 1.53 MB/s against 36.56 MB/s for 200 MB. Writing small
+    parts is the most expensive mistake available here, so it must be called out
+    rather than silently accepted."""
+    from backend.drive_store import plan_files, MIN_FILE_BYTES, MAX_FILE_BYTES
+    small = plan_files(6 * 1024 ** 2)
+    assert small["parts"] == 1 and small["warning"]
+    assert "1.5" in small["warning"] and "36" in small["warning"]
+
+    ok = plan_files(300 * 1024 ** 2)
+    assert ok["parts"] == 1 and ok["warning"] is None
+
+    big = plan_files(4 * 1024 ** 3)
+    assert big["parts"] >= 8
+    assert MIN_FILE_BYTES * 0.7 <= big["part_bytes"] <= MAX_FILE_BYTES
+
+
+def test_blob_placement_splits_at_the_inline_limit():
+    from backend.drive_store import blob_placement, BLOB_INLINE_MAX
+    assert blob_placement(1024) == "inline"
+    assert blob_placement(BLOB_INLINE_MAX) == "inline"
+    assert blob_placement(BLOB_INLINE_MAX + 1) == "standalone"
+
+
+def test_write_options_carry_compression_and_the_sort_key():
+    """zstd is 1.9x smaller than snappy for 0.07s of decompression, and the sort
+    key is what makes row-group statistics tight enough to skip on."""
+    from backend.drive_store import write_options
+    o = write_options(sort_key="block_time")
+    assert o["compression"] == "zstd"
+    assert o["sort_by"] == "block_time"
+
+
+def test_catalog_accumulates_across_incremental_writes(tmp_path):
+    """Partitions arrive in batches. Overwriting totals would leave the catalog
+    describing only the last batch, which is worse than having no catalog."""
+    from backend.drive_store import Catalog, L2
+    cat = Catalog(str(tmp_path / "datasets.json"))
+    cat.upsert(layer=L2, partition_keys={"name": "addr_flow_1d"},
+               rows=100, bytes_=1000, files=1, time_min="2024-01", time_max="2024-01")
+    cat.upsert(layer=L2, partition_keys={"name": "addr_flow_1d"},
+               rows=50, bytes_=500, files=1, time_min="2023-12", time_max="2024-02")
+    e = cat.get("features_addr_flow_1d")
+    assert e["rows"] == 150 and e["bytes"] == 1500 and e["files"] == 2
+    # The span must widen in both directions, not follow the latest write.
+    assert e["time_min"] == "2023-12" and e["time_max"] == "2024-02"
+
+
+def test_catalog_survives_a_corrupt_file(tmp_path):
+    from backend.drive_store import Catalog
+    p = tmp_path / "datasets.json"
+    p.write_text("{not json")
+    assert Catalog(str(p)).list() == []
+
+
+def test_catalog_summary_says_it_excludes_raw_chain_data():
+    """The Drive total is a few hundred GB while the raw chain data is 61.31 TB on
+    S3. A bare number here would be read as the whole holding."""
+    import os as _os
+    import tempfile
+    from backend.drive_store import Catalog
+    with tempfile.TemporaryDirectory() as d:
+        summary = Catalog(_os.path.join(d, "c.json")).summary()
+    assert "S3" in summary["note"] and summary["total_datasets"] == 0

@@ -231,6 +231,209 @@ elif kind == "downloadbench":
     except Exception as e:
         result["error"] = str(e)[:300]
 
+elif kind == "computebench":
+    # Real DuckDB throughput on the real runtime. Every earlier compute figure
+    # came from a 2M-row aggregate on the operator's laptop, which says nothing
+    # about factor work over billions of rows on 4 vCPU.
+    pip("duckdb", "polars", "pyarrow")
+    import duckdb, polars as pl, numpy as np
+    rows = int(PARAMS.get("rows", 50_000_000))
+    work = os.path.join(OUT, "computebench")
+    os.makedirs(work, exist_ok=True)
+
+    t0 = time.time()
+    # A shape close to token_transfers: time, two addresses, a value, a token.
+    n = rows
+    df = pl.DataFrame({
+        "block_time": np.random.randint(1_600_000_000, 1_700_000_000, n, dtype=np.int64),
+        "from_address": np.random.randint(0, 2_000_000, n, dtype=np.int64),
+        "to_address": np.random.randint(0, 2_000_000, n, dtype=np.int64),
+        "value": np.random.random(n) * 1e18,
+        "token": np.random.randint(0, 5000, n, dtype=np.int32),
+    })
+    path = os.path.join(work, "bench.parquet")
+    df.write_parquet(path, compression="zstd")
+    gen_s = time.time() - t0
+    size = os.path.getsize(path)
+
+    con = duckdb.connect(":memory:")
+    queries = {
+        # 1: the cheapest thing anyone does -- daily rollup.
+        "daily_rollup": f"SELECT block_time//86400 d, count(*) c, sum(value) v "
+                        f"FROM read_parquet('{path}') GROUP BY 1",
+        # 2: per-entity aggregation, the shape most on-chain factors take.
+        "per_address": f"SELECT from_address, count(*) c, sum(value) v "
+                       f"FROM read_parquet('{path}') GROUP BY 1 HAVING c > 5",
+        # 3: a window function, which is where backtest features get expensive.
+        "rolling": f"SELECT token, block_time, "
+                   f"avg(value) OVER (PARTITION BY token ORDER BY block_time "
+                   f"ROWS BETWEEN 100 PRECEDING AND CURRENT ROW) m "
+                   f"FROM read_parquet('{path}') LIMIT 1000",
+    }
+    timings = {}
+    for name, q in queries.items():
+        t = time.time()
+        con.execute(q).fetchall()
+        el = time.time() - t
+        timings[name] = {"seconds": round(el, 2),
+                         "rows_per_s": int(rows / max(1e-6, el)),
+                         "mb_per_s": round(size / 1024**2 / max(1e-6, el), 1)}
+
+    result["compute"] = {
+        "rows": rows,
+        "parquet_mb": round(size / 1024**2, 1),
+        "generate_seconds": round(gen_s, 1),
+        "queries": timings,
+    }
+    import shutil as _sh
+    _sh.rmtree(work, ignore_errors=True)
+
+elif kind == "rangebench":
+    # How much data does a query actually have to pull?
+    # Parquet is columnar with row groups and a footer index, so a reader that
+    # can issue HTTP range requests fetches only the columns and row groups the
+    # query touches. Everything measured so far assumed whole-file transfers,
+    # which is what drive_rest.download() does -- this measures the alternative.
+    pip("duckdb")
+    import duckdb
+
+    def net_bytes():
+        # Interface counters are the only honest way to see what crossed the
+        # wire; DuckDB's own stats would not include HTTP overhead.
+        total = 0
+        with open("/proc/net/dev") as f:
+            for line in f.readlines()[2:]:
+                name, _, rest = line.partition(":")
+                if name.strip() == "lo":
+                    continue
+                total += int(rest.split()[0])
+        return total
+
+    day = PARAMS.get("day", "2024-01-15")
+    table = PARAMS.get("table", "transactions")
+    chain = PARAMS.get("chain", "eth")
+    prefix = f"s3://aws-public-blockchain/v1.0/{chain}/{table}/date={day}/"
+
+    # Plain ListObjectsV2 over HTTPS: the bucket is public, and this avoids
+    # depending on the aws CLI being installed in the image (it is not).
+    import urllib.request as _u, xml.etree.ElementTree as _et
+    list_url = ("https://aws-public-blockchain.s3.amazonaws.com/?list-type=2&prefix="
+                + f"v1.0/{chain}/{table}/date={day}/")
+    files = []
+    try:
+        xml = _u.urlopen(list_url, timeout=60).read()
+        ns = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
+        for c in _et.fromstring(xml).findall("s3:Contents", ns):
+            k = c.find("s3:Key", ns).text
+            sz = int(c.find("s3:Size", ns).text)
+            if k.endswith(".parquet"):
+                files.append((sz, k.rsplit("/", 1)[-1]))
+    except Exception as e:
+        result["error"] = f"listing failed: {str(e)[:200]}"
+    if not files and "error" not in result:
+        result["error"] = f"no parquet under {prefix}"
+    if not files:
+        pass
+    else:
+        files.sort(reverse=True)
+        size, key = files[0]
+        url = (f"https://aws-public-blockchain.s3.amazonaws.com/"
+               f"v1.0/{chain}/{table}/date={day}/{key}")
+        result["file"] = {"key": key, "size_mb": round(size / 1024**2, 1)}
+
+        con = duckdb.connect(":memory:")
+        con.execute("INSTALL httpfs; LOAD httpfs;")
+
+        # Each measurement is recorded as it completes. An earlier attempt lost
+        # two finished measurements because the third raised (a table named
+        # "full" -- reserved in DuckDB) before anything was written.
+        result["queries"] = {}
+
+        def measure(name, sql, pick=None):
+            b0 = net_bytes(); t0 = time.time()
+            try:
+                rows = con.execute(sql).fetchall()
+            except Exception as e:
+                result["queries"][name] = {"error": str(e)[:200]}
+                return
+            entry = {"transferred_mb": round((net_bytes() - b0) / 1024**2, 1),
+                     "seconds": round(time.time() - t0, 2)}
+            if pick and rows:
+                entry["result"] = pick(rows)
+            result["queries"][name] = entry
+
+        # 1) Row count. Parquet keeps this in the footer, so a range-capable
+        #    reader should need almost nothing.
+        measure("count_only", f"SELECT count(*) FROM read_parquet('{url}')",
+                lambda r: {"rows": r[0][0]})
+        # 2) One column aggregated -- the shape nearly every factor starts from.
+        measure("one_column_avg",
+                f"SELECT avg(try_cast(value AS DOUBLE)) FROM read_parquet('{url}')")
+        # 3) Two columns with a predicate, i.e. a realistic slice.
+        measure("two_cols_filtered",
+                f"SELECT count(*) FROM read_parquet('{url}') "
+                f"WHERE try_cast(value AS DOUBLE) > 0")
+        # 4) Every column, for the comparison that matters.
+        measure("all_columns",
+                f"CREATE TABLE loaded AS SELECT * FROM read_parquet('{url}')")
+
+elif kind == "formatbench":
+    # Does compression slow reads down? The pipeline is transfer-bound (measured
+    # 29.96 MB/s down from Drive) while DuckDB runs at 119-743 MB/s, so the
+    # answer should be no -- but on real chain data, not a guess.
+    pip("duckdb")
+    import duckdb, urllib.request as _u, xml.etree.ElementTree as _et
+
+    day = PARAMS.get("day", "2024-01-15")
+    chain, table = PARAMS.get("chain", "eth"), PARAMS.get("table", "transactions")
+    list_url = ("https://aws-public-blockchain.s3.amazonaws.com/?list-type=2&prefix="
+                + f"v1.0/{chain}/{table}/date={day}/")
+    xml = _u.urlopen(list_url, timeout=60).read()
+    ns = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
+    keys = [(int(c.find("s3:Size", ns).text), c.find("s3:Key", ns).text)
+            for c in _et.fromstring(xml).findall("s3:Contents", ns)
+            if c.find("s3:Key", ns).text.endswith(".parquet")]
+    keys.sort(reverse=True)
+    src = ("https://aws-public-blockchain.s3.amazonaws.com/" + keys[0][1])
+    result["source"] = {"key": keys[0][1].rsplit("/", 1)[-1], "size_mb": round(keys[0][0] / 1024**2, 1)}
+
+    work = os.path.join(OUT, "formatbench"); os.makedirs(work, exist_ok=True)
+    con = duckdb.connect(":memory:")
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    t0 = time.time()
+    con.execute(f"CREATE TABLE t AS SELECT * FROM read_parquet('{src}')")
+    result["load_seconds"] = round(time.time() - t0, 2)
+    rows = con.execute("SELECT count(*) FROM t").fetchone()[0]
+    result["rows"] = rows
+
+    variants = {}
+    for codec in ("uncompressed", "snappy", "zstd"):
+        path = os.path.join(work, f"{codec}.parquet")
+        t0 = time.time()
+        con.execute(f"COPY t TO '{path}' (FORMAT PARQUET, COMPRESSION '{codec}')")
+        write_s = time.time() - t0
+        size = os.path.getsize(path)
+
+        # Read back twice: a narrow aggregate and a full scan.
+        t0 = time.time()
+        con.execute(f"SELECT avg(try_cast(value AS DOUBLE)) FROM read_parquet('{path}')").fetchall()
+        narrow_s = time.time() - t0
+        t0 = time.time()
+        con.execute(f"SELECT count(*) FROM (SELECT * FROM read_parquet('{path}')) x").fetchall()
+        full_s = time.time() - t0
+
+        variants[codec] = {
+            "size_mb": round(size / 1024**2, 1),
+            "write_seconds": round(write_s, 2),
+            "narrow_read_seconds": round(narrow_s, 2),
+            "full_read_seconds": round(full_s, 2),
+            # What matters end to end: bytes over a 30 MB/s link plus the read.
+            "drive_transfer_seconds_at_30MBps": round(size / 1024**2 / 30, 1),
+        }
+        os.remove(path)
+    result["variants"] = variants
+    import shutil as _sh; _sh.rmtree(work, ignore_errors=True)
+
 elif kind == "drivecheck":
     # Answers "can a Kaggle kernel reach our Drive?" with measurements rather
     # than assumption. Kaggle has no FUSE mount at all (google.colab.drive
