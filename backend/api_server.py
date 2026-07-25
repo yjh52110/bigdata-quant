@@ -22,6 +22,8 @@ from backend.mcp_logs import read_recent_logs
 from backend.transfer_log import get_today_totals
 from backend.binance_ingestion import ingest_binance_klines
 from backend.gemini_probe import probe_all, list_models, pick_default_model, TIER_RULES, DOC_URL
+from backend import s3_views
+from backend.drive_store import Catalog, LAYERS, MIN_FILE_BYTES, MAX_FILE_BYTES, COMPRESSION
 from backend.kaggle_control import overview as kaggle_overview
 from backend.kaggle_dispatch import (
     dispatch as kaggle_dispatch, refresh_jobs as kaggle_refresh_jobs,
@@ -124,6 +126,16 @@ os.makedirs(DATA_DIR, exist_ok=True)
 # parquet files exist on disk before every query so newly-ingested data shows
 # up without restarting the server.
 conn = duckdb.connect(':memory:')
+
+# httpfs is installed once here, not inside a query. Installing it lazily made
+# the first /api/s3/query after startup return the CREATE VIEW result shape
+# (a "Count" column, no rows) instead of the SELECT's -- a wrong answer rather
+# than an error, which is the worst failure mode available.
+try:
+    s3_views.prepare(conn)
+    logging.info("httpfs ready; S3 datasets can be queried in place")
+except Exception as e:
+    logging.warning(f"httpfs unavailable, /api/s3/query will fail: {str(e)[:200]}")
 
 account_manager = GoogleAccountManager()
 gemini_pool = MultiKeyGeminiPool()
@@ -638,6 +650,112 @@ def worker_drive_rest():
     path = os.path.join(os.path.dirname(__file__), "drive_rest.py")
     with open(path) as f:
         return f.read()
+
+
+@app.get("/api/datasources")
+def data_sources():
+    """The S3 catalogue plus the Drive catalogue, side by side.
+
+    They are different in kind and the response says so: S3 is raw public data we
+    read in place and never copy, Drive is only what this platform derived. Merging
+    the two totals would suggest we hold 61 TB, which we do not.
+    """
+    chains = []
+    for chain, info in sorted(s3_views.LAYOUT.items()):
+        tables = []
+        for t in info["tables"]:
+            m = s3_views.MEASURED.get((chain, t))
+            tables.append({
+                "table": t,
+                "gb": m["gb"] if m else None,
+                "days": m["days"] if m else None,
+                "earliest": m["earliest"] if m else None,
+                "latest": m["latest"] if m else None,
+            })
+        chains.append({
+            "chain": chain,
+            "maintainer": info.get("maintainer"),
+            "prefix": info["prefix"],
+            "total_gb": s3_views.measured_total_gb(chain) or None,
+            "tables": sorted(tables, key=lambda x: -(x["gb"] or 0)),
+        })
+
+    cat = Catalog()
+    return {
+        "s3": {
+            "bucket": s3_views.BUCKET,
+            "chains": sorted(chains, key=lambda c: -(c["total_gb"] or 0)),
+            "total_gb": s3_views.measured_total_gb(),
+            "note": ("原始链上数据，留在 S3 原地查询，不复制到云盘。"
+                     "体积为逐分区列举后按年采样加权所得，非精确值。"),
+        },
+        "drive": {
+            "catalog": cat.list(),
+            "summary": cat.summary(),
+            "layers": list(LAYERS),
+            "rules": {
+                "compression": COMPRESSION,
+                "file_bytes_min": MIN_FILE_BYTES,
+                "file_bytes_max": MAX_FILE_BYTES,
+                "why": ("200MB 上传 36.56 MB/s，5.9MB 仅 1.53 MB/s（实测，差 24 倍）；"
+                        "zstd 比 snappy 小 47%，解压只多 0.07s；文件内按时间排序才能让"
+                        "行组统计足够紧、谓词下推真能跳过"),
+            },
+        },
+    }
+
+
+class S3QueryRequest(BaseModel):
+    sql: str
+    chain: str
+    table: str
+    date_prefix: str = ""
+
+
+@app.post("/api/s3/query")
+def s3_query(req: S3QueryRequest):
+    """Runs a read-only SELECT against one S3 table, registered as a view.
+
+    A date_prefix is strongly advised: the wildcard's directory listing is what a
+    broad range spends its time on, and some tables run to tens of terabytes.
+    """
+    if not is_select_only(req.sql):
+        raise HTTPException(status_code=400, detail="Only read-only SELECT statements are allowed")
+    try:
+        name = s3_views.register(conn, req.chain, req.table, req.date_prefix)
+    except s3_views.S3ViewError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    started = time.time()
+    try:
+        cur = conn.execute(req.sql)
+        # Read the description off the cursor before consuming it: the shared
+        # connection's description reflects whatever statement ran last.
+        cols = [d[0] for d in (cur.description or [])]
+        rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {str(e)[:300]}")
+    if cols == ["Count"] and not rows:
+        # The shape DDL returns. Reaching here means the SELECT never ran.
+        raise HTTPException(status_code=500,
+                            detail="query returned a DDL result shape -- httpfs may not be loaded")
+    return {
+        "view": name,
+        "columns": cols,
+        "rows": [list(r) for r in rows[:500]],
+        "row_count": len(rows),
+        "truncated": len(rows) > 500,
+        "elapsed_ms": round((time.time() - started) * 1000, 1),
+    }
+
+
+@app.get("/api/s3/schema/{chain}/{table}")
+def s3_schema(chain: str, table: str, date_prefix: str = ""):
+    """Column names and types, read from one file's footer (a few hundred KB)."""
+    try:
+        return {"chain": chain, "table": table,
+                "columns": s3_views.describe(conn, chain, table, date_prefix)}
+    except s3_views.S3ViewError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/workers")

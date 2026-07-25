@@ -13,6 +13,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import Overview from './components/Overview';
+import DataSources from './components/DataSources';
 import GoogleAccounts from './components/GoogleAccounts';
 import DataAssets from './components/DataAssets';
 import DuckDBEngine from './components/DuckDBEngine';
@@ -28,6 +29,7 @@ import type { Key as I18nKey } from './i18n';
 const menuItems: { id: string; labelKey: I18nKey; icon: typeof LayoutDashboard; component: React.ComponentType }[] = [
   { id: 'overview', labelKey: 'nav.overview', icon: LayoutDashboard, component: Overview },
   { id: 'google-accounts', labelKey: 'nav.accounts', icon: Cloud, component: GoogleAccounts },
+  { id: 'data-sources', labelKey: 'nav.sources', icon: Database, component: DataSources },
   { id: 'data-assets', labelKey: 'nav.assets', icon: Database, component: DataAssets },
   { id: 'duckdb', labelKey: 'nav.duckdb', icon: Cpu, component: DuckDBEngine },
   { id: 'gemini', labelKey: 'nav.gemini', icon: Key, component: GeminiPool },

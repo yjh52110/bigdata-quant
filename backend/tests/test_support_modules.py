@@ -1118,3 +1118,65 @@ def test_catalog_summary_says_it_excludes_raw_chain_data():
     with tempfile.TemporaryDirectory() as d:
         summary = Catalog(_os.path.join(d, "c.json")).summary()
     assert "S3" in summary["note"] and summary["total_datasets"] == 0
+
+
+# --------------------------------------------------------------------------
+# s3_views: querying the public dataset in place
+# --------------------------------------------------------------------------
+def test_chain_prefix_handles_the_nested_provider_layout():
+    """Five chains sit one level deeper, under v1.1/sonarx/. Assuming
+    "{version}/{chain}/" would silently miss half the catalogue."""
+    from backend.s3_views import glob_for
+    assert "v1.0/eth/transactions" in glob_for("eth", "transactions")
+    assert "v1.1/sonarx/base/traces" in glob_for("base", "traces")
+    assert "v1.1/sonarx/arbitrum/logs" in glob_for("arbitrum", "logs")
+
+
+def test_glob_uses_the_s3_scheme_not_https():
+    """DuckDB refuses globs on generic HTTP paths: "Globs (`*`) for generic HTTP
+    file is are not supported". Measured -- the https:// form fails outright."""
+    from backend.s3_views import glob_for
+    g = glob_for("eth", "blocks", "2024-01")
+    assert g.startswith("s3://") and "https://" not in g
+    assert "date=2024-01*" in g
+
+
+def test_date_prefix_is_validated():
+    from backend.s3_views import glob_for, S3ViewError
+    for bad in ("2024/01", "last-week", "24-01", "'; DROP"):
+        with pytest.raises(S3ViewError, match="date_prefix"):
+            glob_for("eth", "blocks", bad)
+
+
+def test_unknown_chain_or_table_is_refused_with_the_options():
+    from backend.s3_views import glob_for, S3ViewError
+    with pytest.raises(S3ViewError, match="unknown chain"):
+        glob_for("solana", "blocks")
+    with pytest.raises(S3ViewError, match="no table"):
+        glob_for("btc", "traces")          # btc has blocks and transactions only
+
+
+def test_every_measured_table_exists_in_the_layout():
+    """The two are edited separately; a size row for a table the layout doesn't
+    know would surface as a dashboard entry that cannot be queried."""
+    from backend.s3_views import MEASURED, LAYOUT
+    for (chain, table) in MEASURED:
+        assert chain in LAYOUT, chain
+        assert table in LAYOUT[chain]["tables"], (chain, table)
+
+
+def test_measured_totals_match_the_recorded_measurement():
+    """61.31 TB across the sampled tables, measured 2026-07-26. A silent edit to
+    a size row would otherwise go unnoticed."""
+    from backend.s3_views import measured_total_gb
+    assert 62_000 <= measured_total_gb() <= 64_000
+    assert 5_800 <= measured_total_gb("eth") <= 6_600
+    assert measured_total_gb("base") > measured_total_gb("eth")   # L2 outgrew L1
+
+
+def test_view_name_is_derivable_without_a_round_trip():
+    """The dashboard builds the same name client-side to keep the SQL box in step
+    with the picker, so the rule has to be pure."""
+    from backend.s3_views import view_name
+    assert view_name("eth", "blocks", "2024-01-15") == "s3_eth_blocks_2024_01_15"
+    assert view_name("cronos", "decoded-events") == "s3_cronos_decoded_events"
