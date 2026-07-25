@@ -20,6 +20,14 @@ Limits worth knowing before you rely on this:
   * Colab is meant for interactive use; Google may throttle or stop
     long-running background work, so treat this as best-effort compute,
     not as infrastructure you can promise uptime on.
+
+Colab exposes no external REST API -- it has no entry in Google's API
+discovery directory and colab.googleapis.com returns 404 -- so nothing can
+be submitted to it or queried from outside. It does provide an in-notebook
+Python API (google.colab), and this worker uses three parts of it: drive to
+mount storage, userdata to read the API key out of Colab Secrets rather
+than the notebook body, and runtime.unassign to hand the machine back when
+idle.
 """
 
 import os
@@ -30,11 +38,31 @@ import uuid
 # Your admin API must be reachable from Colab, i.e. a public URL (a tunnel
 # or a small VPS). http://localhost:8000 will NOT work from Colab.
 API_BASE = os.environ.get("CHAINQUANT_API", "https://your-host.example.com")
-API_KEY = os.environ.get("QUANT_API_KEY", "")
 
 WORKER_LABEL = os.environ.get("WORKER_LABEL", "colab-1")
 POLL_SECONDS = 5
 DRIVE_ROOT = "/content/drive/MyDrive/chainquant"
+
+# Release the Colab runtime once the queue has been empty this long, so an
+# unattended worker stops burning the session allowance. 0 disables it.
+IDLE_UNASSIGN_S = int(os.environ.get("IDLE_UNASSIGN_S", "0"))
+
+
+def _api_key():
+    """Prefers Colab Secrets over an env var or a literal in the notebook.
+
+    Notebooks get saved to Drive and shared, so a key pasted into a cell
+    leaks with the file. google.colab.userdata keeps it out of the document.
+    Add it under the key icon in Colab's left sidebar as QUANT_API_KEY.
+    """
+    try:
+        from google.colab import userdata  # type: ignore
+        return userdata.get("QUANT_API_KEY")
+    except Exception:
+        return os.environ.get("QUANT_API_KEY", "")
+
+
+API_KEY = _api_key()
 
 
 def setup():
@@ -51,6 +79,23 @@ def setup():
 
 def _headers():
     return {"X-API-Key": API_KEY} if API_KEY else {}
+
+
+def release_runtime():
+    """Hands the runtime back via google.colab.runtime.unassign().
+
+    Colab has no external API to stop a session, but it does expose this
+    from inside the notebook, which is the only way to release compute
+    without a human closing the tab.
+    """
+    try:
+        from google.colab import runtime as colab_runtime  # type: ignore
+        print("Idle limit reached -- unassigning the Colab runtime.")
+        colab_runtime.unassign()
+        return True
+    except Exception as e:
+        print(f"Could not unassign runtime ({type(e).__name__}: {e})")
+        return False
 
 
 SESSION_START = time.time()
@@ -220,6 +265,9 @@ def main():
                               headers=_headers(), timeout=30)
                 if idle % 12 == 1:
                     print(f"[{time.strftime('%H:%M:%S')}] idle, waiting for jobs...")
+                if IDLE_UNASSIGN_S and idle * POLL_SECONDS >= IDLE_UNASSIGN_S:
+                    release_runtime()
+                    break
                 time.sleep(POLL_SECONDS)
                 continue
 
