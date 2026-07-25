@@ -120,6 +120,10 @@ kind = PARAMS.get("kind", "aws")
 if kind == "aws":
     # AWS public blockchain dataset: no credentials, already Parquet.
     pip("awscli")
+    # Timed from here, not from script start: the pip install above took most of
+    # the earlier run's wall clock and dragged the reported rate down to 0.3 MB/s
+    # for a transfer that actually takes seconds.
+    dl_started = time.time()
     chain, table = PARAMS["chain"], PARAMS["table"]
     dest = os.path.join(OUT, f"chain_{chain}_{table}")
     os.makedirs(dest, exist_ok=True)
@@ -136,8 +140,10 @@ if kind == "aws":
         else:
             os.rmdir(d) if not os.listdir(d) else None
             result.setdefault("failed_days", []).append({"day": day, "err": r.stderr[-200:]})
+    dl_elapsed = max(1e-6, time.time() - dl_started)
     result.update({"days_written": days, "bytes": total,
-                   "mb_per_s": round(total / 1024**2 / max(1e-6, time.time() - started), 1)})
+                   "download_seconds": round(dl_elapsed, 2),
+                   "mb_per_s": round(total / 1024**2 / dl_elapsed, 1)})
 
 elif kind == "binance":
     pip("polars")
@@ -169,6 +175,23 @@ elif kind == "binance":
         df.write_parquet(p, compression="zstd")
         written.append(ym); rows += df.height
     result.update({"months_written": written, "rows": rows})
+
+elif kind == "uploadbench":
+    # Pure upload throughput. The 5.9 MB ingest run reported 1.53 MB/s, but that
+    # is one resumable chunk: session-create plus a single PUT, so per-request
+    # latency dominates and the figure says nothing about sustained bandwidth.
+    # Generating the payload in-runtime keeps the download side out of it.
+    mb = int(PARAMS.get("mb", 200))
+    dest = os.path.join(OUT, "uploadbench")
+    os.makedirs(dest, exist_ok=True)
+    path = os.path.join(dest, f"bench_{mb}mb.bin")
+    t0 = time.time()
+    with open(path, "wb") as f:
+        # Incompressible, so Drive can't flatter the number by compressing it.
+        for _ in range(mb):
+            f.write(os.urandom(1024 * 1024))
+    result["generate_seconds"] = round(time.time() - t0, 2)
+    result["payload_mb"] = mb
 
 elif kind == "drivecheck":
     # Answers "can a Kaggle kernel reach our Drive?" with measurements rather
@@ -229,16 +252,25 @@ else:
 # secret is read from Kaggle Secrets, never embedded in this script -- the
 # script is stored in the kernel and would leak with it.
 if PARAMS.get("drive_folder"):
-    try:
-        from kaggle_secrets import UserSecretsClient
-        raw = UserSecretsClient().get_secret(PARAMS.get("secret_name", "DRIVE_OAUTH_JSON"))
-    except Exception as e:
-        result["drive"] = {"error": f"could not read secret: {str(e)[:200]}"}
-        raw = None
-    if raw:
+    raw = None
+    tok = None
+    # A short-lived access token may be passed in the params instead. It is only
+    # for one-off measurement: it expires in about an hour and cannot be used to
+    # mint another, so leaving it in the stored kernel source is bounded in a way
+    # a refresh token never would be. Production paths use Secrets.
+    if PARAMS.get("drive_access_token"):
+        tok = PARAMS["drive_access_token"]
+    else:
+        try:
+            from kaggle_secrets import UserSecretsClient
+            raw = UserSecretsClient().get_secret(PARAMS.get("secret_name", "DRIVE_OAUTH_JSON"))
+        except Exception as e:
+            result["drive"] = {"error": f"could not read secret: {str(e)[:200]}"}
+    if raw or tok:
         try:
             import drive_rest
-            tok = drive_rest.token_from_secret(raw)
+            if tok is None:
+                tok = drive_rest.token_from_secret(raw)
             targets = [d for d in os.listdir(OUT)
                        if os.path.isdir(os.path.join(OUT, d))]
             ups = []
@@ -271,9 +303,32 @@ print("__RESULT__" + json.dumps(result))
 '''
 
 
+DRIVE_REST_PATH = os.path.join(os.path.dirname(__file__), "drive_rest.py")
+
+
 def render_script(params: Dict[str, Any]) -> str:
-    # json.dumps twice so the payload survives being embedded in the script.
-    return _INGEST_SCRIPT.replace("__PARAMS__", json.dumps(params).replace('"""', '\\"\\"\\"'))
+    """Builds the self-contained kernel script.
+
+    drive_rest.py is embedded rather than shipped alongside: `kernels push`
+    uploads the folder, but Kaggle only treats code_file as the kernel source,
+    so a sibling module is not importable in the runtime -- measured, the job
+    failed with "No module named 'drive_rest'". The repo still holds exactly one
+    copy; it is materialised into the script at dispatch time.
+    """
+    with open(DRIVE_REST_PATH) as f:
+        module_src = f.read()
+    body = _INGEST_SCRIPT.replace(
+        "__PARAMS__", json.dumps(params).replace('"""', '\\"\\"\\"'))
+    return (
+        "# --- begin embedded backend/drive_rest.py (do not edit here) ---\n"
+        "import sys as _sys, types as _types\n"
+        "_m = _types.ModuleType('drive_rest')\n"
+        "_m.__dict__['__name__'] = 'drive_rest'\n"
+        f"exec(compile({module_src!r}, 'drive_rest.py', 'exec'), _m.__dict__)\n"
+        "_sys.modules['drive_rest'] = _m\n"
+        "# --- end embedded module ---\n\n"
+        + body
+    )
 
 
 # Prefer the URL Kaggle prints, because the slug it actually used may differ

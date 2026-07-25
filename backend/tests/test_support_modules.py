@@ -632,15 +632,45 @@ def test_kaggle_push_ships_the_shared_drive_client(monkeypatch, tmp_path):
     assert seen["files"] == ["drive_rest.py", "job.py", "kernel-metadata.json"]
 
 
-def test_dispatched_script_never_inlines_the_credential():
-    """The script is stored in the kernel, so a secret pasted into it would leak
-    with the kernel. It must only ever be read from Kaggle Secrets."""
+def test_dispatched_script_never_inlines_a_long_lived_credential():
+    """The script is stored in the kernel, so anything pasted into it leaks with
+    the kernel. Checked against credential *values*, not field names: the
+    embedded drive_rest module legitimately mentions "client_secret" and
+    "refresh_token" as required keys of the secret it parses."""
     from backend.kaggle_dispatch import render_script
     src = render_script({"kind": "aws", "chain": "eth", "table": "blocks",
                          "days": ["2024-01-15"], "drive_folder": "chainquant"})
     compile(src, "job.py", "exec")
-    assert "UserSecretsClient" in src
-    assert "client_secret" not in src and "refresh_token" not in src
+    assert "UserSecretsClient" in src              # the credential is read, not carried
+    # Value prefixes, not field names: the embedded module necessarily names the
+    # OAuth form fields it posts.
+    assert "GOCSPX-" not in src                    # Google client-secret prefix
+    assert "1//" not in src                        # Google refresh-token prefix
+
+
+def test_drive_rest_is_embedded_not_shipped_as_a_sibling_file():
+    """`kernels push` uploads the folder, but Kaggle only treats code_file as the
+    kernel source: a sibling module is not importable there. Measured -- the job
+    failed with "No module named 'drive_rest'" while the file sat in the pushed
+    folder. So the module has to be materialised into the script itself."""
+    from backend.kaggle_dispatch import render_script
+    src = render_script({"kind": "aws", "chain": "eth", "table": "blocks",
+                         "days": ["2024-01-15"], "drive_folder": "chainquant"})
+    assert "def upload_tree" in src and "def access_token" in src
+    assert "_sys.modules['drive_rest']" in src
+    compile(src, "job.py", "exec")
+
+
+def test_download_rate_excludes_dependency_install_time():
+    """The first run reported 0.3 MB/s for a transfer of seconds, because the
+    rate was measured from script start and pip install dominated."""
+    from backend.kaggle_dispatch import render_script
+    src = render_script({"kind": "aws", "chain": "eth", "table": "blocks",
+                         "days": ["2024-01-15"]})
+    assert "dl_started = time.time()" in src
+    assert "download_seconds" in src
+    # The clock must start after the install, not at script start.
+    assert src.index('pip("awscli")') < src.index("dl_started = time.time()")
 
 
 def test_unreachable_host_raises_named_error_not_a_bare_urlerror(monkeypatch):
@@ -716,27 +746,40 @@ def test_measure_script_uses_a_small_target_not_a_huge_table():
     assert '"drive_folder"' in src
 
 
-def test_measure_script_never_touches_either_credential():
-    """Both credentials stay with their own stores: the CLI reads its own token
-    file, the kernel reads Kaggle Secrets. Checked against the code rather than
-    the prose, so the docstring can still explain where they come from."""
+def test_credential_handling_is_confined_to_one_function():
+    """The default path never touches the credential -- Kaggle Secrets carries
+    it. --use-access-token deliberately does, to mint a ~1h token, and that is
+    the only place allowed to: keeping it in one named function is what makes the
+    exposure reviewable."""
     import ast
     import pathlib
 
     tree = ast.parse(pathlib.Path("scripts/measure_drive_write.py").read_text())
-    # Strip docstrings, which legitimately name the credentials.
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)):
-            if (node.body and isinstance(node.body[0], ast.Expr)
-                    and isinstance(node.body[0].value, ast.Constant)
-                    and isinstance(node.body[0].value.value, str)):
-                node.body = node.body[1:]
-    code = ast.unparse(tree)
+    touching = {"_decrypt", "GoogleAccountManager", "CREDENTIALS_FILE", "refresh_token"}
+    offenders = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "mint_access_token":
+            continue
+        src = ast.unparse(node)
+        for name in touching:
+            if name in src:
+                offenders.append((getattr(node, "name", type(node).__name__), name))
+    assert not offenders, f"credential handling leaked outside mint_access_token: {offenders}"
 
-    for forbidden in ("refresh_token", "client_secret", "_decrypt",
-                      "GoogleAccountManager", "export_drive_secret",
-                      "credentials.json", ".kaggle/kaggle.json"):
-        assert forbidden not in code, f"{forbidden} must not appear in executable code"
+
+def test_minted_token_is_never_printed():
+    """It is a live credential for about an hour; it belongs in the job params,
+    not in a terminal or a log."""
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path("scripts/measure_drive_write.py").read_text())
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == "mint_access_token")
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "print":
+            printed = ast.unparse(node)
+            assert "token" not in printed or "len(token)" in printed, printed
 
 
 def test_push_timeout_is_seconds_not_a_duration_string(monkeypatch, tmp_path):
@@ -861,3 +904,78 @@ def test_kaggle_drive_reachability_records_both_sides_of_verification():
     # Colab's comparable figure must stay alongside it: the two are only
     # meaningful relative to each other for a bandwidth-bound pipeline.
     assert "185.9" in egress["note"]
+
+
+def test_export_script_indexes_accounts_as_a_dict(monkeypatch, tmp_path, capsys):
+    """GoogleAccountManager.accounts is keyed by account_index. Iterating it as
+    a list of records yields strings, which raised AttributeError on the first
+    real account -- and stayed hidden while the pool was empty, because the
+    loop simply never ran."""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "export_drive_secret", "scripts/export_drive_secret.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    creds = tmp_path / "credentials.json"
+    creds.write_text(json.dumps({"web": {"client_id": "real-id", "client_secret": "real-secret"}}))
+    monkeypatch.setattr(mod, "CREDENTIALS_FILE", str(creds))
+
+    class FakeMgr:
+        accounts = {"acc-01": {"account_index": "acc-01", "refresh_token": "enc"}}
+
+        def _decrypt(self, v):
+            return "plain-refresh-token"
+
+    monkeypatch.setattr(mod, "GoogleAccountManager", FakeMgr)
+    monkeypatch.setattr(sys, "argv", ["export_drive_secret.py", "acc-01"])
+
+    assert mod.main() == 0
+    printed = json.loads(capsys.readouterr().out.strip())
+    assert printed == {"client_id": "real-id", "client_secret": "real-secret",
+                       "refresh_token": "plain-refresh-token"}
+
+
+def test_export_script_lists_connected_accounts_on_a_bad_name(monkeypatch, tmp_path, capsys):
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "export_drive_secret2", "scripts/export_drive_secret.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    creds = tmp_path / "credentials.json"
+    creds.write_text(json.dumps({"web": {"client_id": "real-id", "client_secret": "s"}}))
+    monkeypatch.setattr(mod, "CREDENTIALS_FILE", str(creds))
+
+    class FakeMgr:
+        accounts = {"acc-01": {}, "acc-02": {}}
+
+    monkeypatch.setattr(mod, "GoogleAccountManager", FakeMgr)
+    monkeypatch.setattr(sys, "argv", ["export_drive_secret.py", "acc-99"])
+    assert mod.main() == 1
+    assert "acc-01, acc-02" in capsys.readouterr().err
+
+
+def test_upload_figure_carries_the_scale_caveat():
+    """Measured 36.56 MB/s at 200 MB but 1.53 MB/s at 5.9 MB on the same code
+    path -- a 24x spread caused purely by per-request round trips. Quoting the
+    small-file number without the caveat would understate capacity by that much."""
+    from backend.kaggle_control import FREE_TIER
+    by = {f["item"]: f for f in FREE_TIER}
+    up = by["写入云盘上行（实测）"]
+    assert up["source"] == "measured" and "36.56" in up["value"]
+    assert "1.53" in up["note"] and "小文件" in up["note"]
+
+
+def test_uploadbench_generates_incompressible_data():
+    """Compressible filler would let Drive flatter the throughput figure."""
+    from backend.kaggle_dispatch import render_script
+    src = render_script({"kind": "uploadbench", "mb": 200, "drive_folder": "chainquant"})
+    compile(src, "job.py", "exec")
+    assert "os.urandom" in src
+    # It must not spend the measurement on a download it doesn't need.
+    assert "aws s3 cp" not in src.split("elif kind == \"uploadbench\"")[1].split("elif")[0]

@@ -574,6 +574,8 @@ class KaggleDispatchRequest(BaseModel):
     interval: str = "1m"
     months: list[str] = []
     timeout: int | None = None
+    mb: int = 200
+    drive_folder: str = "chainquant"
 
 
 @app.post("/api/kaggle/dispatch")
@@ -587,6 +589,8 @@ def kaggle_dispatch_job(req: KaggleDispatchRequest):
         if not req.days:
             raise HTTPException(status_code=400, detail="days must not be empty for an aws job")
         params = {"kind": "aws", "chain": req.chain, "table": req.table, "days": req.days}
+    elif req.kind == "uploadbench":
+        params = {"kind": "uploadbench", "mb": req.mb, "drive_folder": req.drive_folder}
     elif req.kind == "drivecheck":
         # No parameters: it only measures reachability from inside the kernel.
         params = {"kind": "drivecheck"}

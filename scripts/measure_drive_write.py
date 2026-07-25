@@ -6,17 +6,29 @@ operator's home uplink (measured 0.52 MB/s), which says nothing about what the
 pipeline will actually do -- ingestion runs inside Colab/Kaggle, on a datacenter
 link. So the measurement has to happen there.
 
-Prerequisites, both of which involve placing a credential and are therefore
-yours to do, not this script's:
+Prerequisites:
 
-  1. ~/.kaggle/kaggle.json      Kaggle API token (Settings -> API -> Create New Token)
-  2. Kaggle secret DRIVE_OAUTH_JSON
-                                the line printed by scripts/export_drive_secret.py,
-                                pasted into a notebook's Add-ons -> Secrets
+  1. ~/.kaggle/kaggle.json      Kaggle API token. Long-lived -- valid until you
+                                revoke it. Placing it is yours to do.
+  2. A Drive credential reaching the kernel, one of two ways:
+
+     default          Kaggle secret DRIVE_OAUTH_JSON, holding the line printed by
+                      scripts/export_drive_secret.py. The refresh token stays in
+                      Kaggle's encrypted store, is injected at run time and is
+                      masked in logs. Configure once, works for every later run,
+                      and Colab reads the same name.
+
+     --use-access-token
+                      Mint a short-lived Drive access token locally and pass it
+                      in the job params instead. It expires in about an hour and
+                      cannot mint another, so it being in the stored kernel
+                      source is bounded in a way a refresh token would not be.
+                      Suitable for a one-off measurement; not for a pipeline,
+                      because every run needs a fresh one.
 
 Then:
 
-    python3 scripts/measure_drive_write.py <your-kaggle-username>
+    python3 scripts/measure_drive_write.py <your-kaggle-username> [--use-access-token]
 
 It dispatches, polls until the run finishes, fetches the output, and prints the
 throughput. Nothing here reads or transmits either credential: the Kaggle CLI
@@ -91,11 +103,38 @@ def report(result: dict) -> None:
     print(f"总耗时: {result.get('elapsed_s')} s")
 
 
+def mint_access_token() -> str:
+    """Exchanges the stored refresh token for a ~1h access token.
+
+    The value is returned, never printed: it goes straight into the job params.
+    """
+    from backend.google_account_manager import GoogleAccountManager, CREDENTIALS_FILE
+    from backend import drive_rest
+
+    mgr = GoogleAccountManager()
+    if not mgr.accounts:
+        raise SystemExit("error: no Google account connected -- connect one in the dashboard first")
+    index = sorted(mgr.accounts)[0]
+    account = mgr.accounts[index]
+    if not account.get("refresh_token"):
+        raise SystemExit(f"error: account {index!r} has no refresh token")
+    with open(CREDENTIALS_FILE) as f:
+        blk = json.load(f)
+    blk = blk.get("web") or blk.get("installed")
+    token = drive_rest.access_token(blk["client_id"], blk["client_secret"],
+                                    mgr._decrypt(account["refresh_token"]))
+    print(f"用账号 {index} 换到短期 access token（{len(token)} 字符，约 1 小时后失效，值不打印）")
+    return token
+
+
 def main() -> int:
-    if len(sys.argv) != 2:
+    args = [a for a in sys.argv[1:]]
+    use_access_token = "--use-access-token" in args
+    args = [a for a in args if not a.startswith("--")]
+    if len(args) != 1:
         print(__doc__)
         return 2
-    username = sys.argv[1]
+    username = args[0]
 
     st = kc.cli_status()
     if not st["installed"]:
@@ -110,6 +149,11 @@ def main() -> int:
     params = {"kind": "aws", "chain": "eth", "table": "blocks",
               "days": ["2024-01-15"], "drive_folder": "chainquant"}
     slug = "cq-measure-drive-write"
+    if use_access_token:
+        params["drive_access_token"] = mint_access_token()
+        # A distinct slug, so the kernel carrying a token never overwrites the
+        # Secrets-based one that is meant to be re-run.
+        slug = "cq-write-speed-oneoff"
 
     print(f"派发 {username}/{slug} ...")
     try:

@@ -56,3 +56,9 @@ backend/data/mcp_users.json
 backend/data/jobs.db*
 backend/data/chain/
 .claude/
+
+# Kaggle job artefacts fetched by kernels output: measurement payloads and
+# parquet, not source. One benchmark file is 200 MB of random bytes, which
+# GitHub rejects outright (100 MB limit).
+backend/data/kaggle_output/
+backend/data/kaggle_jobs.json

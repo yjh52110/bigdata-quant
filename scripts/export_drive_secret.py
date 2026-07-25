@@ -66,9 +66,12 @@ def main() -> int:
         return 1
 
     mgr = GoogleAccountManager()
-    account = next((a for a in mgr.accounts if a.get("index") == wanted), None)
+    # accounts is a dict keyed by account_index, not a list. Iterating it yields
+    # the keys, so treating it as a list of records raised AttributeError on the
+    # first real account -- invisible while the pool was still empty.
+    account = mgr.accounts.get(wanted)
     if account is None:
-        have = ", ".join(a.get("index", "?") for a in mgr.accounts) or "(none connected)"
+        have = ", ".join(sorted(mgr.accounts)) or "(none connected)"
         print(f"error: no account {wanted!r}. Connected accounts: {have}", file=sys.stderr)
         return 1
     if not account.get("refresh_token"):

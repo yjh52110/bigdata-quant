@@ -79,6 +79,9 @@ FREE_TIER = [
     {"item": "本账号当前状态", "value": "已手机验证 → 联网与算力均可用", "source": "measured",
      "note": "2026-07-25 验证前后各测一次：验证前 kernel 内 DNS 不通、gcs 下行 0.0 MB/s；验证后出网通、"
              "gcs 下行 324.5 MB/s。同一份代码、同一个探针，差别只在验证状态"},
+    {"item": "写入云盘上行（实测）", "value": "36.56 MB/s", "source": "measured",
+     "note": "kernel 内生成 200MB 不可压缩数据后经 Drive REST 上传。注意规模效应：同一条路径传 5.9MB "
+             "只有 1.53 MB/s，因为一个分片的建会话+PUT 两个往返就占满了时间——小文件的数字不能用来做容量规划"},
     {"item": "到 Google 存储下行（实测）", "value": "324.5 MB/s", "source": "measured",
      "note": "kernel 内实测，约为 Colab 同一测法（185.9 MB/s）的 1.75 倍；本项目入库是带宽受限，"
              "因此这项差异比 GPU 额度重要得多"},
