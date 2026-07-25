@@ -17,12 +17,63 @@ export default function ColabWorkers() {
   const [msg, setMsg] = useState<string | null>(null);
   const [colab, setColab] = useState<any>(null);
   const [kaggle, setKaggle] = useState<any>(null);
+  const [kgJobs, setKgJobs] = useState<any[]>([]);
+  const [kgUser, setKgUser] = useState('');
+  const [kgKind, setKgKind] = useState<'aws' | 'binance'>('aws');
+  const [kgChain, setKgChain] = useState('eth');
+  const [kgTable, setKgTable] = useState('blocks');
+  const [kgDays, setKgDays] = useState('2024-01-15');
+  const [kgSymbol, setKgSymbol] = useState('BTCUSDT');
+  const [kgInterval, setKgInterval] = useState('1m');
+  const [kgMonths, setKgMonths] = useState('2024-01');
+  const [kgBusy, setKgBusy] = useState(false);
+  const [kgMsg, setKgMsg] = useState<string | null>(null);
+
+  const loadKgJobs = (refresh = false) => {
+    apiFetch(`/api/kaggle/jobs${refresh ? '?refresh=true' : ''}`)
+      .then(r => r.json()).then(d => setKgJobs(d.jobs || [])).catch(console.error);
+  };
+
+  const dispatchKaggle = async () => {
+    setKgBusy(true); setKgMsg(null);
+    // Slug must be unique per push or Kaggle versions the same kernel; index by
+    // job shape so repeat runs of the same target are recognisable in the list.
+    const stamp = kgKind === 'aws' ? `${kgChain}-${kgTable}` : `${kgSymbol.toLowerCase()}-${kgInterval}`;
+    try {
+      const res = await apiFetch('/api/kaggle/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: kgUser.trim(), slug: `cq-${kgKind}-${stamp}`, kind: kgKind,
+          chain: kgChain, table: kgTable, days: kgDays.split(',').map(x => x.trim()).filter(Boolean),
+          symbol: kgSymbol, interval: kgInterval,
+          months: kgMonths.split(',').map(x => x.trim()).filter(Boolean),
+        }),
+      });
+      const d = await res.json();
+      setKgMsg(res.ok ? t('kg.dispatched', { ref: d.ref }) : (d.detail || t('kg.dispatchFailed')));
+      if (res.ok) loadKgJobs();
+    } catch (e) {
+      setKgMsg(String(e));
+    } finally { setKgBusy(false); }
+  };
+
+  const fetchKgOutput = async (ref: string) => {
+    setKgBusy(true);
+    try {
+      const res = await apiFetch(`/api/kaggle/output/${ref}`, { method: 'POST' });
+      const d = await res.json();
+      setKgMsg(d.result ? t('kg.gotOutput', { n: d.files, mb: (d.bytes / 1048576).toFixed(1) })
+                        : (d.raw || t('kg.noOutput')));
+    } catch (e) { setKgMsg(String(e)); } finally { setKgBusy(false); }
+  };
   const [probing, setProbing] = useState<string | null>(null);
   const [probeResult, setProbeResult] = useState<Record<string, any>>({});
 
   const loadColab = () => {
     apiFetch('/api/colab/status').then(r => r.json()).then(setColab).catch(console.error);
     apiFetch('/api/kaggle/status').then(r => r.json()).then(setKaggle).catch(console.error);
+    loadKgJobs();
   };
 
   const [measuring, setMeasuring] = useState(false);
@@ -434,6 +485,91 @@ export default function ColabWorkers() {
               <p className="text-xs text-red-400 font-mono break-words mb-3">{kaggle.reason}</p>
             )
           )}
+
+          <div className="mt-5 pt-5 border-t border-slate-700/60">
+            <h4 className="text-sm font-semibold text-slate-300 mb-1 flex items-center gap-2">
+              <Send size={14} className="text-cyan-400" />
+              {t('kg.dispatchTitle')}
+            </h4>
+            <p className="text-xs text-slate-500 mb-3">{t('kg.dispatchNote')}</p>
+
+            <div className="flex flex-col sm:flex-row gap-2 mb-3">
+              <input value={kgUser} onChange={e => setKgUser(e.target.value)}
+                placeholder={t('kg.usernamePlaceholder')}
+                className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-sm text-slate-200 font-mono" />
+              <div className="flex gap-2">
+                {(['aws', 'binance'] as const).map(k => (
+                  <button key={k} onClick={() => setKgKind(k)}
+                    className={`text-xs px-3 min-h-[44px] sm:min-h-0 sm:py-2 rounded border ${kgKind === k
+                      ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
+                      : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
+                    {k === 'aws' ? t('kg.kindAws') : t('kg.kindBinance')}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {kgKind === 'aws' ? (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
+                <input value={kgChain} onChange={e => setKgChain(e.target.value)} placeholder="eth / btc"
+                  className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-sm text-slate-200 font-mono" />
+                <input value={kgTable} onChange={e => setKgTable(e.target.value)} placeholder="blocks / transactions"
+                  className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-sm text-slate-200 font-mono" />
+                <input value={kgDays} onChange={e => setKgDays(e.target.value)} placeholder="2024-01-15,2024-01-16"
+                  className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-sm text-slate-200 font-mono" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
+                <input value={kgSymbol} onChange={e => setKgSymbol(e.target.value)} placeholder="BTCUSDT"
+                  className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-sm text-slate-200 font-mono" />
+                <input value={kgInterval} onChange={e => setKgInterval(e.target.value)} placeholder="1m"
+                  className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-sm text-slate-200 font-mono" />
+                <input value={kgMonths} onChange={e => setKgMonths(e.target.value)} placeholder="2024-01,2024-02"
+                  className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-sm text-slate-200 font-mono" />
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-2 items-center">
+              <button onClick={dispatchKaggle} disabled={kgBusy || !kgUser.trim() || !kaggle.authenticated}
+                className="text-sm px-4 min-h-[44px] sm:min-h-0 sm:py-2 rounded bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 disabled:opacity-40">
+                {kgBusy ? t('kg.dispatching') : t('kg.dispatch')}
+              </button>
+              <button onClick={() => loadKgJobs(true)} disabled={kgBusy}
+                className="text-sm px-3 min-h-[44px] sm:min-h-0 sm:py-2 rounded border border-slate-700 text-slate-400 disabled:opacity-40">
+                {t('kg.refreshJobs')}
+              </button>
+              {!kaggle.authenticated && <span className="text-xs text-amber-400">{t('kg.needToken')}</span>}
+            </div>
+            {kgMsg && <p className="text-xs text-slate-300 mt-2 break-words font-mono">{kgMsg}</p>}
+
+            <h5 className="text-xs font-semibold text-slate-400 mt-4 mb-2">{t('kg.jobsTitle')}</h5>
+            <ResponsiveTable
+              rows={kgJobs}
+              empty={t('kg.noJobs')}
+              columns={[
+                { key: 'ref', header: t('kg.colRef'), cellClass: 'text-slate-200 font-mono text-xs break-all', render: (x: any) => x.ref },
+                { key: 'kind', header: t('kg.colKind'), cellClass: 'text-slate-400 text-xs', render: (x: any) => x.params?.kind || '—' },
+                {
+                  key: 'state', header: t('cw.colState'),
+                  render: (x: any) => {
+                    const tone = x.status === 'COMPLETE' ? 'bg-emerald-500/20 text-emerald-400'
+                      : x.status === 'ERROR' ? 'bg-red-500/20 text-red-400'
+                      : 'bg-amber-500/20 text-amber-400';
+                    return <span className={`text-xs px-2 py-1 rounded ${tone}`}>{x.status}</span>;
+                  },
+                },
+                {
+                  key: 'act', header: t('kg.colAction'), alignRight: true,
+                  render: (x: any) => (
+                    <button onClick={() => fetchKgOutput(x.ref)} disabled={kgBusy || x.status !== 'COMPLETE'}
+                      className="text-xs px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded border border-slate-700 text-slate-300 disabled:opacity-40">
+                      {t('kg.getOutput')}
+                    </button>
+                  ),
+                },
+              ]}
+            />
+          </div>
 
           <h4 className="text-sm font-semibold text-slate-300 mt-5 mb-2">{t('kg.freeTierTitle')}</h4>
           <p className="text-xs text-slate-500 mb-3">{kaggle.free_tier_note}</p>

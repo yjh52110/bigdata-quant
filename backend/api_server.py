@@ -23,6 +23,11 @@ from backend.transfer_log import get_today_totals
 from backend.binance_ingestion import ingest_binance_klines
 from backend.gemini_probe import probe_all, list_models, pick_default_model, TIER_RULES, DOC_URL
 from backend.kaggle_control import overview as kaggle_overview
+from backend.kaggle_dispatch import (
+    dispatch as kaggle_dispatch, refresh_jobs as kaggle_refresh_jobs,
+    fetch_output as kaggle_fetch_output, logs as kaggle_logs,
+    list_jobs as kaggle_list_jobs, DispatchError as KaggleDispatchError,
+)
 from backend.colab_control import (
     overview as colab_overview, probe_session as colab_probe_session,
     probe_entitlements as colab_probe_entitlements,
@@ -546,6 +551,64 @@ def kaggle_status():
     genuinely readable here (`kaggle quota`), so real numbers are returned --
     or an explicit not-authenticated state, never a placeholder figure."""
     return kaggle_overview()
+
+
+class KaggleDispatchRequest(BaseModel):
+    username: str
+    slug: str
+    kind: str = "aws"
+    # aws
+    chain: str = "eth"
+    table: str = "blocks"
+    days: list[str] = []
+    # binance
+    symbol: str = "BTCUSDT"
+    interval: str = "1m"
+    months: list[str] = []
+    timeout: str | None = None
+
+
+@app.post("/api/kaggle/dispatch")
+def kaggle_dispatch_job(req: KaggleDispatchRequest):
+    """Pushes one ingest job to Kaggle and returns immediately.
+
+    Kaggle queues the run, so this does not wait: poll /api/kaggle/jobs for
+    state and call /api/kaggle/output/... once a job reports COMPLETE.
+    """
+    if req.kind == "aws":
+        if not req.days:
+            raise HTTPException(status_code=400, detail="days must not be empty for an aws job")
+        params = {"kind": "aws", "chain": req.chain, "table": req.table, "days": req.days}
+    elif req.kind == "binance":
+        if not req.months:
+            raise HTTPException(status_code=400, detail="months must not be empty for a binance job")
+        params = {"kind": "binance", "symbol": req.symbol, "interval": req.interval,
+                  "months": req.months}
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown kind: {req.kind}")
+
+    try:
+        return kaggle_dispatch(req.username, req.slug, params, timeout=req.timeout)
+    except KaggleDispatchError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/kaggle/jobs")
+def kaggle_jobs(refresh: bool = False):
+    """Dispatched jobs. refresh=true polls Kaggle for the non-terminal ones,
+    which costs one CLI call each, so it is opt-in rather than automatic."""
+    return {"jobs": list(reversed(kaggle_refresh_jobs())) if refresh else kaggle_list_jobs()}
+
+
+@app.post("/api/kaggle/output/{owner}/{slug}")
+def kaggle_output(owner: str, slug: str):
+    dest = os.path.join(DATA_DIR, "kaggle_output", slug)
+    return kaggle_fetch_output(f"{owner}/{slug}", dest)
+
+
+@app.get("/api/kaggle/logs/{owner}/{slug}")
+def kaggle_job_logs(owner: str, slug: str):
+    return kaggle_logs(f"{owner}/{slug}")
 
 
 @app.get("/api/workers")

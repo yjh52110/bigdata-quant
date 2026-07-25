@@ -405,3 +405,110 @@ def test_live_quota_is_declared_authoritative_over_the_researched_table(monkeypa
     o = k.overview()
     assert "kaggle quota" in o["free_tier_note"]
     assert "优先" in o["free_tier_note"]
+
+
+# --------------------------------------------------------------------------
+# kaggle_dispatch
+# --------------------------------------------------------------------------
+def test_internet_is_forced_on_for_every_dispatched_kernel():
+    """Kaggle defaults enable_internet to False. Every job this project
+    dispatches fetches from S3 / Binance / Drive, so leaving it to the caller
+    means jobs that fail silently with empty output."""
+    from backend.kaggle_dispatch import build_metadata
+    m = build_metadata("u", "cq-aws-eth-blocks", "t", "job.py")
+    assert m["enable_internet"] is True
+    assert m["is_private"] is True
+
+
+def test_metadata_matches_the_clis_own_permitted_values():
+    """Key names and values come from the installed CLI's validation lists, not
+    from docs, so a schema drift shows up here rather than as a push failure."""
+    from backend.kaggle_dispatch import build_metadata, LANGUAGES, KERNEL_TYPES
+    m = build_metadata("u", "cq-test-slug", "t", "job.py")
+    assert m["language"] in LANGUAGES and m["kernel_type"] in KERNEL_TYPES
+    assert m["id"] == "u/cq-test-slug"
+    assert set(m) == {"id", "title", "code_file", "language", "kernel_type", "is_private",
+                      "enable_gpu", "enable_tpu", "enable_internet", "dataset_sources",
+                      "competition_sources", "kernel_sources", "model_sources"}
+
+
+def test_slug_rules_match_kaggles_validation():
+    """Kaggle rejects slugs under five characters and slugs carrying an owner
+    or version, so catch both before spending a push."""
+    from backend.kaggle_dispatch import build_metadata, DispatchError
+    with pytest.raises(DispatchError, match="five|5"):
+        build_metadata("u", "abcd", "t", "job.py")
+    with pytest.raises(DispatchError, match="slash"):
+        build_metadata("u", "owner/slug-name", "t", "job.py")
+    assert build_metadata("u", "abcde", "t", "job.py")["id"] == "u/abcde"
+
+
+def test_generated_job_script_is_valid_python_with_params_inlined():
+    """The kernel only receives the pushed folder, so the script must be
+    self-contained and must compile before it costs a push."""
+    from backend.kaggle_dispatch import render_script
+    src = render_script({"kind": "aws", "chain": "eth", "table": "blocks",
+                         "days": ["2024-01-15"]})
+    compile(src, "job.py", "exec")
+    assert '"chain": "eth"' in src
+    assert "/kaggle/working" in src
+
+
+def test_dispatch_refuses_without_a_token_instead_of_pushing(monkeypatch):
+    import backend.kaggle_dispatch as kd
+    monkeypatch.setattr(kd, "cli_status", lambda: {
+        "installed": True, "authenticated": False, "auth_hint": "放置 kaggle.json"})
+    with pytest.raises(kd.DispatchError, match="kaggle.json"):
+        kd.dispatch("u", "cq-test-slug", {"kind": "aws"})
+
+
+def test_dispatch_records_ref_and_version_from_push_output(monkeypatch, tmp_path):
+    import backend.kaggle_dispatch as kd
+    monkeypatch.setattr(kd, "JOBS_FILE", str(tmp_path / "jobs.json"))
+    monkeypatch.setattr(kd, "cli_status", lambda: {
+        "installed": True, "authenticated": True, "auth_hint": None})
+    monkeypatch.setattr(kd, "_run", lambda a, timeout=0: {
+        "ok": True, "err": "",
+        "out": "Kernel version 3 successfully pushed. Please check progress at "
+               "https://www.kaggle.com/code/someuser/cq-aws-eth-blocks"})
+    job = kd.dispatch("someuser", "cq-aws-eth-blocks",
+                      {"kind": "aws", "chain": "eth", "table": "blocks", "days": ["2024-01-15"]})
+    assert job["ref"] == "someuser/cq-aws-eth-blocks"
+    assert job["version"] == 3
+    assert job["status"] == "QUEUED"
+    assert kd.list_jobs()[0]["ref"] == job["ref"]
+
+
+def test_failed_push_raises_with_the_backends_own_message(monkeypatch, tmp_path):
+    import backend.kaggle_dispatch as kd
+    monkeypatch.setattr(kd, "JOBS_FILE", str(tmp_path / "jobs.json"))
+    monkeypatch.setattr(kd, "cli_status", lambda: {
+        "installed": True, "authenticated": True, "auth_hint": None})
+    monkeypatch.setattr(kd, "_run", lambda a, timeout=0: {
+        "ok": False, "out": "", "err": "403 - You don't have permission"})
+    with pytest.raises(kd.DispatchError, match="403"):
+        kd.dispatch("u", "cq-test-slug", {"kind": "aws"})
+    assert kd.list_jobs() == []      # a failed push must not be recorded as a job
+
+
+def test_status_recognises_every_state_the_sdk_declares():
+    from backend.kaggle_dispatch import _STATUS_RE, DONE_STATES
+    from backend.kaggle_control import KERNEL_STATES
+    for st in KERNEL_STATES:
+        assert _STATUS_RE.search(f'"status": "{st}"'), st
+    assert DONE_STATES == {"COMPLETE", "ERROR", "CANCEL_ACKNOWLEDGED"}
+    assert "RUNNING" not in DONE_STATES and "QUEUED" not in DONE_STATES
+
+
+def test_refresh_only_polls_jobs_that_are_still_running(monkeypatch, tmp_path):
+    """Each poll is a CLI call, so finished jobs must not be re-checked."""
+    import backend.kaggle_dispatch as kd
+    monkeypatch.setattr(kd, "JOBS_FILE", str(tmp_path / "jobs.json"))
+    kd._save_jobs([{"ref": "u/done", "status": "COMPLETE"},
+                   {"ref": "u/live", "status": "QUEUED"}])
+    polled = []
+    monkeypatch.setattr(kd, "status", lambda ref: (polled.append(ref),
+                        {"ref": ref, "state": "RUNNING", "done": False})[1])
+    jobs = kd.refresh_jobs()
+    assert polled == ["u/live"]
+    assert {j["ref"]: j["status"] for j in jobs} == {"u/done": "COMPLETE", "u/live": "RUNNING"}
