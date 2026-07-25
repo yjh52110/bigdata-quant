@@ -207,3 +207,34 @@ def test_missing_cli_degrades_instead_of_raising(monkeypatch):
     monkeypatch.setattr(c.shutil, "which", lambda _: None)
     s = c.list_sessions()
     assert s["available"] is False and s["sessions"] == []
+
+
+def test_entitlement_probe_records_verbatim_rejection(monkeypatch, tmp_path):
+    """The backend's own rejection text is the only authoritative reason an
+    account can't get a machine type, so it must be stored, not paraphrased."""
+    import backend.colab_control as c
+    monkeypatch.setattr(c, "ENTITLEMENT_CACHE", str(tmp_path / "ent.json"))
+    monkeypatch.setattr(c, "HARDWARE", {"cpu": ["DEFAULT"], "gpu": ["A100"], "tpu": []})
+    monkeypatch.setattr(c, "_run", lambda a, timeout=0: {
+        "ok": False, "out": "", "err": "Backend rejected accelerator 'A100'. You may not have quota"}
+        if "--gpu" in a else {"ok": True, "out": "Session READY.", "err": ""})
+    monkeypatch.setattr(c, "probe_session", lambda n: {"ok": True, "specs": {"cpu_count": 2}})
+
+    r = c.probe_entitlements()
+    by = {a["variant"]: a for a in r["attempts"]}
+    assert by["DEFAULT"]["granted"] is True
+    assert by["A100"]["granted"] is False
+    assert "Backend rejected accelerator 'A100'" in by["A100"]["reason"]
+    assert r["granted"] == ["cpu:DEFAULT"]
+    assert c.cached_entitlements()["granted"] == ["cpu:DEFAULT"]
+
+
+def test_plans_carry_no_invented_burn_rate():
+    """Google shows the per-hour compute-unit burn rate only in the notebook UI;
+    nothing can read it, so no rate may appear in the plan table."""
+    from backend.colab_control import PLANS, UNITS_EXPIRY_NOTE
+    blob = " ".join(f"{p['plan']}{p['units']}{p['extra']}" for p in PLANS)
+    assert "单元/小时" not in blob and "units/hour" not in blob
+    assert "读不到" in UNITS_EXPIRY_NOTE
+    assert any("100" in p["units"] for p in PLANS)   # Pro, from the official page
+    assert any("600" in p["units"] for p in PLANS)   # Pro+

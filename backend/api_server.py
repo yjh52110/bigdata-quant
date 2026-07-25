@@ -24,6 +24,7 @@ from backend.binance_ingestion import ingest_binance_klines
 from backend.gemini_probe import probe_all, list_models, pick_default_model, TIER_RULES, DOC_URL
 from backend.colab_control import (
     overview as colab_overview, probe_session as colab_probe_session,
+    probe_entitlements as colab_probe_entitlements,
 )
 from backend.aws_blockchain_ingestion import (
     ingest_aws_blockchain, preview as aws_preview, BudgetExceeded,
@@ -524,6 +525,18 @@ def colab_probe(session: str):
     if not r.get("ok"):
         raise HTTPException(status_code=400, detail=r.get("error", "probe failed"))
     return r
+
+
+@app.post("/api/colab/entitlements")
+def colab_entitlements():
+    """Measures which machine types this account can actually obtain.
+
+    No API reports an account's entitlements, so each variant is requested and
+    the backend's accept/reject is recorded. Slow by nature (one session
+    creation per variant), so the result is cached and served by
+    /api/colab/status; this endpoint is the explicit re-measure.
+    """
+    return colab_probe_entitlements()
 
 
 @app.get("/api/workers")

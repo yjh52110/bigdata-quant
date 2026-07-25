@@ -1,0 +1,76 @@
+{
+  "probed_at": 1784965824.1505349,
+  "attempts": [
+    {
+      "kind": "cpu",
+      "variant": "DEFAULT",
+      "granted": true,
+      "specs": {
+        "cpu_count": 2,
+        "ram_gb": 12.7,
+        "disk_total_gb": 107.7,
+        "disk_free_gb": 87.7,
+        "gpu": "none"
+      }
+    },
+    {
+      "kind": "gpu",
+      "variant": "T4",
+      "granted": true,
+      "specs": {
+        "cpu_count": 2,
+        "ram_gb": 12.7,
+        "disk_total_gb": 112.6,
+        "disk_free_gb": 65.9,
+        "gpu": "Tesla T4, 15360 MiB"
+      }
+    },
+    {
+      "kind": "gpu",
+      "variant": "L4",
+      "granted": false,
+      "reason": "Backend rejected accelerator 'L4'. You may not have quota or entitlement for this accelerator on your account. Try a different one (e.g. --gpu T4) or omit --gpu/--tpu for a CPU runtime."
+    },
+    {
+      "kind": "gpu",
+      "variant": "G4",
+      "granted": false,
+      "reason": "Backend rejected accelerator 'G4'. You may not have quota or entitlement for this accelerator on your account. Try a different one (e.g. --gpu T4) or omit --gpu/--tpu for a CPU runtime."
+    },
+    {
+      "kind": "gpu",
+      "variant": "H100",
+      "granted": false,
+      "reason": "Backend rejected accelerator 'H100'. You may not have quota or entitlement for this accelerator on your account. Try a different one (e.g. --gpu T4) or omit --gpu/--tpu for a CPU runtime."
+    },
+    {
+      "kind": "gpu",
+      "variant": "A100",
+      "granted": false,
+      "reason": "Backend rejected accelerator 'A100'. You may not have quota or entitlement for this accelerator on your account. Try a different one (e.g. --gpu T4) or omit --gpu/--tpu for a CPU runtime."
+    },
+    {
+      "kind": "tpu",
+      "variant": "v5e1",
+      "granted": true,
+      "specs": {
+        "cpu_count": 24,
+        "ram_gb": 47.0,
+        "disk_total_gb": 225.3,
+        "disk_free_gb": 206.3,
+        "gpu": "none"
+      }
+    },
+    {
+      "kind": "tpu",
+      "variant": "v6e1",
+      "granted": false,
+      "reason": "Backend rejected accelerator 'V6E1'. You may not have quota or entitlement for this accelerator on your account. Try a different one (e.g. --gpu T4) or omit --gpu/--tpu for a CPU runtime."
+    }
+  ],
+  "granted": [
+    "cpu:DEFAULT",
+    "gpu:T4",
+    "tpu:v5e1"
+  ]
+}

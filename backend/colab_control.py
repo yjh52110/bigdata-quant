@@ -53,6 +53,20 @@ DOCUMENTED_LIMITS = [
      "note": "CLI 只有 pay 命令（原文 Open the Colab signup page to manage compute units），全部命令中无任何一条能返回余额，只能在 Colab 网页端查看"},
 ]
 
+# Plan figures, quoted from Colab's own signup page (verified 2026-07).
+# Compute units are the billing unit for PAID runtimes only: an account on the
+# free tier sits at 0 units and consumes none. The per-hour burn rate differs
+# per machine type and Google only shows it in the notebook UI when a runtime
+# is selected, so no rate is stored here -- there is nothing to read it from.
+PLANS = [
+    {"plan": "免费版", "units": "0", "extra": "不消耗计算单元；能否拿到 GPU 看当时余量"},
+    {"plan": "Pay As You Go", "units": "按需购买", "extra": "无需订阅，只为实际用量付费"},
+    {"plan": "Colab Pro", "units": "每月 100", "extra": "更快 GPU、更多内存、更高 Gemini 配额"},
+    {"plan": "Colab Pro+", "units": "每月 600", "extra": "含 Pro 全部；关闭浏览器后仍可后台运行最长 24 小时"},
+    {"plan": "Colab Enterprise", "units": "GCP 计费", "extra": "笔记本存到 GCP，集成 BigQuery / Vertex AI"},
+]
+UNITS_EXPIRY_NOTE = "计算单元 90 天后过期。每小时消耗速率随机型不同，只在网页端选定运行时后显示，CLI 与 API 都读不到。"
+
 DOC_LINKS = [
     {"title": "Colab 官方 FAQ / 资源限制", "url": "https://research.google.com/colaboratory/faq.html"},
     {"title": "官方 CLI 仓库", "url": "https://github.com/googlecolab/google-colab-cli"},
@@ -195,10 +209,66 @@ def probe_session(name: str) -> Dict[str, Any]:
         return {"ok": False, "error": f"could not parse specs: {e}"}
 
 
+ENTITLEMENT_CACHE = os.path.join(os.path.dirname(__file__), "data", "colab_entitlements.json")
+
+
+def probe_entitlements(stop_after: bool = True) -> Dict[str, Any]:
+    """Measures which machine types this account can actually obtain.
+
+    There is no API that reports an account's entitlements, so the only honest
+    way to know is to ask for each variant and record whether the backend
+    accepts it. Result is cached because each attempt costs a session
+    creation (tens of seconds).
+    """
+    attempts: List[Dict[str, Any]] = []
+    targets = [("cpu", None, [])] + \
+              [("gpu", v, ["--gpu", v]) for v in HARDWARE["gpu"]] + \
+              [("tpu", v, ["--tpu", v]) for v in HARDWARE["tpu"]]
+
+    for kind, variant, flags in targets:
+        name = f"probe-{kind}-{(variant or 'default').lower()}"
+        r = _run(["new", "-s", name, *flags], timeout=240)
+        text = r["out"] + r["err"]
+        granted = "Session READY" in text
+        row: Dict[str, Any] = {"kind": kind, "variant": variant or "DEFAULT", "granted": granted}
+        if granted:
+            pr = probe_session(name)
+            if pr.get("ok"):
+                row["specs"] = pr["specs"]
+            if stop_after:
+                _run(["stop", "-s", name], timeout=60)
+        else:
+            # Verbatim so the real reason stays visible instead of a guess.
+            m = re.search(r"(Backend rejected[^\n]*)", text)
+            row["reason"] = (m.group(1) if m else text.strip()[-200:])
+        attempts.append(row)
+
+    result = {"probed_at": time.time(), "attempts": attempts,
+              "granted": [f"{a['kind']}:{a['variant']}" for a in attempts if a["granted"]]}
+    try:
+        os.makedirs(os.path.dirname(ENTITLEMENT_CACHE), exist_ok=True)
+        with open(ENTITLEMENT_CACHE, "w") as f:
+            json.dump(result, f, indent=2)
+    except OSError as e:
+        logging.warning(f"could not cache entitlements: {e}")
+    return result
+
+
+def cached_entitlements() -> Optional[Dict[str, Any]]:
+    try:
+        with open(ENTITLEMENT_CACHE) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def overview() -> Dict[str, Any]:
     s = list_sessions()
     return {
         **s,
+        "plans": PLANS,
+        "units_expiry_note": UNITS_EXPIRY_NOTE,
+        "entitlements": cached_entitlements(),
         "hardware_options": HARDWARE,
         "documented_limits": DOCUMENTED_LIMITS,
         "doc_links": DOC_LINKS,

@@ -23,6 +23,18 @@ export default function ColabWorkers() {
     apiFetch('/api/colab/status').then(r => r.json()).then(setColab).catch(console.error);
   };
 
+  const [measuring, setMeasuring] = useState(false);
+
+  const remeasure = async () => {
+    setMeasuring(true);
+    try {
+      await apiFetch('/api/colab/entitlements', { method: 'POST' });
+      loadColab();
+    } catch (e) {
+      console.error(e);
+    } finally { setMeasuring(false); }
+  };
+
   const probe = async (name: string) => {
     setProbing(name);
     try {
@@ -308,6 +320,59 @@ export default function ColabWorkers() {
           ]}
         />
       </div>
+
+      {colab && (
+        <div className="glass-panel p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-1">
+            <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+              <Cpu size={18} className="text-purple-400" />
+              {t('cw.entTitle')}
+            </h3>
+            <button onClick={remeasure} disabled={measuring}
+              className="text-xs px-3 min-h-[44px] sm:min-h-0 sm:py-2 rounded border bg-purple-500/20 border-purple-500/40 text-purple-300 disabled:opacity-50">
+              {measuring ? t('cw.measuring') : t('cw.remeasure')}
+            </button>
+          </div>
+          <p className="text-xs text-slate-500 mb-4">{t('cw.entNote')}</p>
+          {colab.entitlements ? (
+            <ResponsiveTable
+              rows={colab.entitlements.attempts || []}
+              empty="—"
+              columns={[
+                { key: 'hw', header: t('cw.colHardware'), cellClass: 'text-slate-200 font-mono text-sm', render: (x: any) => `${x.kind.toUpperCase()} ${x.variant}` },
+                {
+                  key: 'granted', header: t('cw.colGranted'),
+                  render: (x: any) => (
+                    <span className={`text-xs px-2 py-1 rounded ${x.granted ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-400'}`}>
+                      {x.granted ? t('cw.granted') : t('cw.denied')}
+                    </span>
+                  ),
+                },
+                {
+                  key: 'specs', header: t('cw.colSpecs'), cellClass: 'text-slate-400 font-mono text-xs break-words',
+                  render: (x: any) => x.specs
+                    ? `${x.specs.cpu_count} vCPU · ${x.specs.ram_gb}GB · ${x.specs.disk_total_gb}GB${x.specs.gpu && x.specs.gpu !== 'none' ? ` · ${x.specs.gpu}` : ''}`
+                    : (x.reason ? String(x.reason).slice(0, 90) : '—'),
+                },
+              ]}
+            />
+          ) : (
+            <p className="text-sm text-slate-500">{t('cw.entNeverRun')}</p>
+          )}
+
+          <h4 className="text-sm font-semibold text-slate-300 mt-6 mb-2">{t('cw.plansTitle')}</h4>
+          <p className="text-xs text-amber-300/80 mb-3">{colab.units_expiry_note}</p>
+          <ResponsiveTable
+            rows={colab.plans || []}
+            empty="—"
+            columns={[
+              { key: 'plan', header: t('cw.colPlan'), cellClass: 'text-slate-200 text-sm', render: (x: any) => x.plan },
+              { key: 'units', header: t('cw.colUnits'), cellClass: 'text-amber-300 text-sm', render: (x: any) => x.units },
+              { key: 'extra', header: t('cw.colExtra'), cellClass: 'text-slate-500 text-xs break-words', render: (x: any) => x.extra },
+            ]}
+          />
+        </div>
+      )}
 
       {colab && (
         <div className="glass-panel p-5">
