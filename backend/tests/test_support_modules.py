@@ -700,3 +700,37 @@ def test_pending_oauth_state_stores_both_account_and_verifier():
     # The nonce still has to gate the callback -- it is the only proof the
     # redirect belongs to a flow we started.
     assert "_pending_oauth.pop(state" in cb
+
+
+def test_measure_script_uses_a_small_target_not_a_huge_table():
+    """The measurement must not cost real quota to prove a point: eth/blocks is
+    ~5 MB/day, while traces is ~2.6 GB/day."""
+    import pathlib
+    src = pathlib.Path("scripts/measure_drive_write.py").read_text()
+    assert '"table": "blocks"' in src and '"chain": "eth"' in src
+    assert "traces" not in src
+    # It must request the Drive upload, or it measures only the download half.
+    assert '"drive_folder"' in src
+
+
+def test_measure_script_never_touches_either_credential():
+    """Both credentials stay with their own stores: the CLI reads its own token
+    file, the kernel reads Kaggle Secrets. Checked against the code rather than
+    the prose, so the docstring can still explain where they come from."""
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path("scripts/measure_drive_write.py").read_text())
+    # Strip docstrings, which legitimately name the credentials.
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)):
+            if (node.body and isinstance(node.body[0], ast.Expr)
+                    and isinstance(node.body[0].value, ast.Constant)
+                    and isinstance(node.body[0].value.value, str)):
+                node.body = node.body[1:]
+    code = ast.unparse(tree)
+
+    for forbidden in ("refresh_token", "client_secret", "_decrypt",
+                      "GoogleAccountManager", "export_drive_secret",
+                      "credentials.json", ".kaggle/kaggle.json"):
+        assert forbidden not in code, f"{forbidden} must not appear in executable code"
