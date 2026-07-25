@@ -53,3 +53,4 @@ backend/data/hypersync_output/
 backend/data/*.jsonl
 backend/data/compaction_state.json
 backend/data/mcp_users.json
+backend/data/jobs.db*

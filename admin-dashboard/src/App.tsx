@@ -7,6 +7,7 @@ import {
   Key,
   Shield,
   Activity,
+  Cloudy,
   Menu,
   X,
   LogOut,
@@ -18,6 +19,7 @@ import DuckDBEngine from './components/DuckDBEngine';
 import GeminiPool from './components/GeminiPool';
 import MCPAudit from './components/MCPAudit';
 import Infrastructure from './components/Infrastructure';
+import ColabWorkers from './components/ColabWorkers';
 import Login from './components/Login';
 import { API_BASE_URL, getApiKey, clearApiKey } from './api';
 import { useI18n } from './i18n';
@@ -29,6 +31,7 @@ const menuItems: { id: string; labelKey: I18nKey; icon: typeof LayoutDashboard; 
   { id: 'data-assets', labelKey: 'nav.assets', icon: Database, component: DataAssets },
   { id: 'duckdb', labelKey: 'nav.duckdb', icon: Cpu, component: DuckDBEngine },
   { id: 'gemini', labelKey: 'nav.gemini', icon: Key, component: GeminiPool },
+  { id: 'colab', labelKey: 'nav.colab', icon: Cloudy, component: ColabWorkers },
   { id: 'mcp-audit', labelKey: 'nav.mcp', icon: Shield, component: MCPAudit },
   { id: 'infrastructure', labelKey: 'nav.infra', icon: Activity, component: Infrastructure },
 ];

@@ -4,6 +4,7 @@ import secrets
 import time
 import logging
 from collections import deque
+from typing import Any
 
 import duckdb
 import psutil
@@ -20,6 +21,10 @@ from backend.alerting import list_alert_rules, send_test_alert, telegram_configu
 from backend.mcp_logs import read_recent_logs
 from backend.transfer_log import get_today_totals
 from backend.binance_ingestion import ingest_binance_klines
+from backend.job_queue import (
+    submit_job, claim_job, report_result, heartbeat,
+    list_workers, list_jobs, get_job, queue_stats, WORKER_TIMEOUT_S,
+)
 from backend.mcp_users import (
     list_users as list_mcp_users,
     create_user as create_mcp_user,
@@ -380,6 +385,89 @@ def trigger_test_alert():
     if not ok:
         raise HTTPException(status_code=400, detail=detail)
     return {"sent": True, "detail": detail}
+
+
+class SubmitJobRequest(BaseModel):
+    type: str = "sql"
+    sql: str = ""
+    symbol: str = "BTCUSDT"
+    interval: str = "1m"
+    months: int = 1
+    drive_path: str = ""
+
+
+@app.post("/api/jobs")
+def create_job(req: SubmitJobRequest):
+    if req.type == "sql":
+        if not is_select_only(req.sql):
+            raise HTTPException(status_code=400, detail="SECURITY: only read-only SELECT statements are permitted.")
+        payload = {"sql": req.sql, "drive_path": req.drive_path}
+    elif req.type == "ingest_binance":
+        payload = {"symbol": req.symbol.upper(), "interval": req.interval,
+                   "months": req.months, "drive_path": req.drive_path}
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown job type '{req.type}'")
+    try:
+        return submit_job(req.type, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/jobs")
+def get_jobs(limit: int = 50):
+    return {"jobs": list_jobs(limit), "stats": queue_stats()}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job_detail(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="No such job")
+    return job
+
+
+@app.get("/api/workers")
+def get_workers():
+    return {"workers": list_workers(), "stats": queue_stats()}
+
+
+# --- Worker-facing endpoints (called by the Colab notebook) ---
+
+class HeartbeatRequest(BaseModel):
+    worker_id: str
+    label: str = ""
+    runtime: str = ""
+
+
+@app.post("/api/workers/heartbeat")
+def worker_heartbeat(req: HeartbeatRequest):
+    heartbeat(req.worker_id, req.label, req.runtime)
+    return {"ok": True, "timeout_s": WORKER_TIMEOUT_S}
+
+
+class ClaimRequest(BaseModel):
+    worker_id: str
+
+
+@app.post("/api/jobs/claim")
+def worker_claim(req: ClaimRequest):
+    heartbeat(req.worker_id)
+    job = claim_job(req.worker_id)
+    return {"job": job}
+
+
+class ResultRequest(BaseModel):
+    worker_id: str
+    ok: bool = True
+    result: Any = None
+    error: str = ""
+
+
+@app.post("/api/jobs/{job_id}/result")
+def worker_result(job_id: str, req: ResultRequest):
+    if not report_result(job_id, req.worker_id, req.ok, req.result, req.error):
+        raise HTTPException(status_code=409, detail="Job not found, or not held by this worker")
+    return {"ok": True}
 
 
 @app.get("/api/infrastructure")
