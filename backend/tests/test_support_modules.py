@@ -534,8 +534,10 @@ def test_drive_access_separates_measured_from_inferred():
     assert "KeyError" in by[("Kaggle", "FUSE 挂载")]["note"]
     kaggle_rest = by[("Kaggle", "Drive REST API")]
     assert kaggle_rest["verified"] is True          # a drivecheck kernel ran
-    assert kaggle_rest["works"] is False            # and it found egress closed
+    assert kaggle_rest["works"] is True             # and, once verified, egress was open
     assert all(d["verified"] for d in DRIVE_ACCESS)
+    # Neither platform may claim FUSE works: both were measured to fail.
+    assert not any(d["works"] for d in DRIVE_ACCESS if "FUSE" in d["method"])
 
 
 def test_drivecheck_job_probes_all_four_unknowns():
@@ -827,16 +829,16 @@ def test_ref_comes_from_the_url_kaggle_prints(monkeypatch, tmp_path):
 
 def test_panel_records_that_kaggle_internet_needs_phone_verification():
     """Measured: enable_internet:true has no effect on an unverified account --
-    DNS itself fails inside the kernel. Without this row the empty results look
-    like a bug in our code."""
-    from backend.kaggle_control import FREE_TIER, DRIVE_ACCESS
+    DNS itself fails inside the kernel. This row has to survive the account
+    later becoming verified, because it is what explains an empty result to the
+    next person whose account isn't."""
+    from backend.kaggle_control import FREE_TIER
     by = {f["item"]: f for f in FREE_TIER}
     assert "手机验证" in by["联网前置条件"]["value"]
     assert "Get phone verified" in by["联网前置条件"]["note"]
-    rest = next(d for d in DRIVE_ACCESS
-                if d["platform"] == "Kaggle" and "REST" in d["method"])
-    assert rest["works"] is False and rest["verified"] is True
-    assert "name resolution" in rest["note"]
+    # The before/after contrast is the evidence; keep both figures.
+    state = by["本账号当前状态"]["note"]
+    assert "DNS 不通" in state and "324.5" in state
 
 
 def test_the_wrong_google_colab_claim_was_corrected():
@@ -847,3 +849,22 @@ def test_the_wrong_google_colab_claim_was_corrected():
                 if d["platform"] == "Kaggle" and "FUSE" in d["method"])
     assert "能 import" in fuse["note"]
     assert "KeyError" not in fuse["note"].split("此前")[0]
+
+
+def test_kaggle_drive_reachability_records_both_sides_of_verification():
+    """The same probe was run before and after phone verification: DNS failure
+    and 0.0 MB/s first, then HTTP 401 in 83ms and 324.5 MB/s. Keeping both in
+    the note is what makes the cause attributable to verification rather than
+    to this project's code."""
+    from backend.kaggle_control import DRIVE_ACCESS, FREE_TIER
+    rest = next(d for d in DRIVE_ACCESS
+                if d["platform"] == "Kaggle" and "REST" in d["method"])
+    assert rest["works"] is True and rest["verified"] is True
+    assert "401" in rest["note"] and "手机验证" in rest["note"]
+
+    by = {f["item"]: f for f in FREE_TIER}
+    egress = by["到 Google 存储下行（实测）"]
+    assert egress["source"] == "measured" and "324.5" in egress["value"]
+    # Colab's comparable figure must stay alongside it: the two are only
+    # meaningful relative to each other for a bandwidth-bound pipeline.
+    assert "185.9" in egress["note"]

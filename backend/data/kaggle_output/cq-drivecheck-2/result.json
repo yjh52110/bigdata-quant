@@ -1,0 +1,37 @@
+{
+  "params": {
+    "kind": "drivecheck"
+  },
+  "checks": {
+    "drive_api": {
+      "status": 401,
+      "ms": 83.0,
+      "body": "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other vali"
+    },
+    "oauth_token_endpoint": {
+      "status": 404,
+      "ms": 19.7,
+      "body": ""
+    },
+    "egress_open": true,
+    "kaggle_secrets": {
+      "available": true,
+      "methods": [
+        "GET_USER_SECRET_BY_LABEL_ENDPOINT",
+        "GET_USER_SECRET_ENDPOINT",
+        "get_bigquery_access_token",
+        "get_gcloud_credential",
+        "get_secret",
+        "set_gcloud_credentials",
+        "set_tensorflow_credential"
+      ]
+    },
+    "google_colab_module": true,
+    "gcs_download_MBps": 324.5
+  },
+  "elapsed_s": 4.9,
+  "specs": {
+    "cpu": 4,
+    "ram_gb": 31.3
+  }
+}

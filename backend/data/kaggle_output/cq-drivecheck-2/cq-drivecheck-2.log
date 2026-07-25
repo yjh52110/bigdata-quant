@@ -1,0 +1,8 @@
+[{"stream_name":"stdout","time":6.113654705,"data":"__RESULT__{\"params\": {\"kind\": \"drivecheck\"}, \"checks\": {\"drive_api\": {\"status\": 401, \"ms\": 83.0, \"body\": \"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 401,\\n    \\\"message\\\": \\\"Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other vali\"}, \"oauth_token_endpoint\": {\"status\": 404, \"ms\": 19.7, \"body\": \"\"}, \"egress_open\": true, \"kaggle_secrets\": {\"available\": true, \"methods\": [\"GET_USER_SECRET_BY_LABEL_ENDPOINT\", \"GET_USER_SECRET_ENDPOINT\", \"get_bigquery_access_token\", \"get_gcloud_credential\", \"get_secret\", \"set_gcloud_credentials\", \"set_tensorflow_credential\"]}, \"google_colab_module\": true, \"gcs_download_MBps\": 324.5}, \"elapsed_s\": 4.9, \"specs\": {\"cpu\": 4, \"ram_gb\": 31.3}}\n"}
+,{"stream_name":"stderr","time":9.156563938,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":9.15662356,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":9.471029782,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":9.471062182,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":11.754865395,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":12.855004969,"data":"[NbConvertApp] Writing 314707 bytes to __results__.html\n"}
+]

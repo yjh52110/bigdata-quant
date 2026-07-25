@@ -76,8 +76,12 @@ FREE_TIER = [
      "note": "2023 年从 13 GB 提升；同时 CPU 核数从 2 提到 4。约为 Colab 免费档 12.7 GB 的 2.4 倍"},
     {"item": "持久磁盘", "value": "20 GB", "source": "community",
      "note": "/kaggle/working 会随 notebook 保存，跨会话保留——与 Colab 会话结束即清空不同"},
-    {"item": "本账号当前状态", "value": "未手机验证 → 无联网、无 GPU/TPU", "source": "measured",
-     "note": "额度表虽显示 30h/20h，但在完成手机验证前都用不上；本项目的入库任务需要联网，因此 Kaggle 路径在此之前不可用"},
+    {"item": "本账号当前状态", "value": "已手机验证 → 联网与算力均可用", "source": "measured",
+     "note": "2026-07-25 验证前后各测一次：验证前 kernel 内 DNS 不通、gcs 下行 0.0 MB/s；验证后出网通、"
+             "gcs 下行 324.5 MB/s。同一份代码、同一个探针，差别只在验证状态"},
+    {"item": "到 Google 存储下行（实测）", "value": "324.5 MB/s", "source": "measured",
+     "note": "kernel 内实测，约为 Colab 同一测法（185.9 MB/s）的 1.75 倍；本项目入库是带宽受限，"
+             "因此这项差异比 GPU 额度重要得多"},
     {"item": "GPU 型号", "value": "P100 16GB 或 T4×2", "source": "community",
      "note": "免费档可选单张 P100 或双张 T4（各 16GB）"},
     {"item": "联网前置条件", "value": "需手机验证", "source": "official",
@@ -109,9 +113,10 @@ DRIVE_ACCESS = [
     {"platform": "Kaggle", "method": "FUSE 挂载", "works": False, "verified": True,
      "note": "Kaggle 没有挂载方案。注：google.colab 模块本身在 Kaggle 里能 import（实测 true），"
              "不能用的是 drive.mount()——此前本表写成「import 就 KeyError」，是错的，已按实测更正"},
-    {"platform": "Kaggle", "method": "Drive REST API", "works": False, "verified": True,
-     "note": "实测被出网限制挡住，不是机制问题：kernel 内访问 googleapis.com 与 oauth2.googleapis.com "
-             "均返回 Temporary failure in name resolution，连 DNS 都不通。原因见下方「联网前置条件」"},
+    {"platform": "Kaggle", "method": "Drive REST API", "works": True, "verified": True,
+     "note": "手机验证后实测通：kernel 内 Drive 接口 HTTP 401 / 83.0ms（401 是无令牌时的健康应答，"
+             "证明链路通、仅缺令牌），OAuth 令牌端点 19.7ms 可达。验证前同一探针连 DNS 都不通，"
+             "所以这条的前提是账号已完成手机验证"},
 ]
 
 DOC_LINKS = [
