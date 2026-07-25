@@ -21,7 +21,7 @@ from backend.alerting import list_alert_rules, send_test_alert, telegram_configu
 from backend.mcp_logs import read_recent_logs
 from backend.transfer_log import get_today_totals
 from backend.binance_ingestion import ingest_binance_klines
-from backend.gemini_probe import probe_all, TIER_RULES, DOC_URL
+from backend.gemini_probe import probe_all, list_models, pick_default_model, TIER_RULES, DOC_URL
 from backend.aws_blockchain_ingestion import (
     ingest_aws_blockchain, preview as aws_preview, BudgetExceeded,
     CHAINS as AWS_CHAINS, TABLES as AWS_TABLES,
@@ -394,11 +394,19 @@ def get_gemini_status():
     return gemini_pool.get_status()
 
 
+@app.get("/api/gemini/models")
+def gemini_models():
+    """Which models this account can actually use. Availability is per-account."""
+    if not gemini_pool.api_keys:
+        return {"ok": False, "error": "No GEMINI_API_KEY configured", "models": []}
+    return list_models(gemini_pool.api_keys[0])
+
+
 @app.post("/api/gemini/probe")
-def probe_gemini(model: str = "gemini-2.5-flash"):
+def probe_gemini(model: str = ""):
     """Makes one real call per configured key. Google exposes no quota-remaining
     endpoint, so an actual request is the only way to learn a key's real state."""
-    return probe_all(gemini_pool.api_keys, model)
+    return probe_all(gemini_pool.api_keys, model or None)
 
 
 @app.get("/api/gemini/reference")

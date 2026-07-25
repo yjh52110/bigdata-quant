@@ -44,6 +44,17 @@ class MultiKeyGeminiPool:
             return "***"
         return f"{key[:6]}...{key[-4:]}"
 
+    def _resolved_model(self) -> str:
+        if getattr(self, "_model_cache", None):
+            return self._model_cache
+        try:
+            from backend.gemini_probe import pick_default_model
+            self._model_cache = pick_default_model(self.api_keys[0]) or "gemini-2.5-flash"
+        except Exception:
+            self._model_cache = "gemini-2.5-flash"
+        logging.info(f"Gemini model resolved to {self._model_cache}")
+        return self._model_cache
+
     def get_status(self) -> Dict[str, Any]:
         """Real per-key status for the admin dashboard: masked alias, cooldown
         state, and today's request count. No hardcoded numbers."""
@@ -98,10 +109,15 @@ class MultiKeyGeminiPool:
         self.key_cooldowns[key] = time.time() + duration_seconds
         logging.warning(f"Gemini API key {key[:8]}... placed on cooldown for {duration_seconds} seconds.")
 
-    def generate_content_with_retry(self, prompt: str, model_name: str = "gemini-2.5-flash", max_retries: int = 3) -> Optional[str]:
+    def generate_content_with_retry(self, prompt: str, model_name: str = None, max_retries: int = 3) -> Optional[str]:
         """
         Attempts to generate content, rotating keys and using exponential backoff on 429/failures.
         """
+        # Model availability is per-account and names get retired, so resolve
+        # once rather than hardcoding one that may 404 for a newer account.
+        if model_name is None:
+            model_name = os.environ.get("GEMINI_MODEL") or self._resolved_model()
+
         self._roll_daily_counters_if_needed()
         for attempt in range(max_retries):
             key = self._get_next_available_key()

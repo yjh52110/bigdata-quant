@@ -125,3 +125,29 @@ def test_unreadable_state_file_degrades_gracefully(sync):
     with open(sync.WATCHDOG_STATE_FILE, "w") as f:
         f.write("{corrupt")
     assert sync.get_compaction_status()["last_error"] is not None
+
+
+# --------------------------------------------------------------------------
+# gemini_probe model selection
+# --------------------------------------------------------------------------
+def test_model_picker_prefers_newest_version_not_lexical_order():
+    """A plain reverse sort picks "gemini-flash-lite-latest" over
+    "gemini-3.6-flash" because 'f' > '3' -- silently selecting the weakest
+    model. Selection must compare versions."""
+    from backend.gemini_probe import _version_key
+
+    names = ["gemini-3.6-flash", "gemini-flash-latest", "gemini-flash-lite-latest",
+             "gemini-2.5-flash", "gemini-3.5-flash"]
+    assert max(names, key=_version_key) == "gemini-3.6-flash"
+
+
+def test_model_picker_prefers_full_over_lite_at_same_version():
+    from backend.gemini_probe import _version_key
+    assert max(["gemini-3.5-flash-lite", "gemini-3.5-flash"], key=_version_key) == "gemini-3.5-flash"
+
+
+def test_model_picker_skips_non_text_variants():
+    from backend.gemini_probe import _SPECIAL_VARIANTS
+    for n in ["gemini-3.1-flash-image", "gemini-3.1-flash-tts-preview",
+              "gemini-2.5-computer-use-preview-10-2025"]:
+        assert any(v in n for v in _SPECIAL_VARIANTS), f"{n} should be excluded"
