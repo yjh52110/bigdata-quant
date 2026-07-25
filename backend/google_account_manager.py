@@ -88,8 +88,20 @@ class GoogleAccountManager:
         )
         return auth_url
 
-    def handle_callback(self, account_index: str, code: str, redirect_uri: str = "urn:ietf:wg:oauth:2.0:oob"):
+    def handle_callback(self, account_index: str, code: str,
+                        redirect_uri: str = "urn:ietf:wg:oauth:2.0:oob",
+                        code_verifier: str = None):
+        """Exchanges the authorization code for tokens.
+
+        code_verifier must be the one from the Flow that built the auth URL.
+        google-auth-oauthlib turns PKCE on by default, so the URL carries a
+        code_challenge; the callback runs in a different request with a fresh
+        Flow, and without carrying the verifier across Google rejects the
+        exchange with "(invalid_grant) Missing code verifier."
+        """
         flow = self.get_oauth_flow(redirect_uri)
+        if code_verifier:
+            flow.code_verifier = code_verifier
         flow.fetch_token(code=code)
         creds = flow.credentials
         

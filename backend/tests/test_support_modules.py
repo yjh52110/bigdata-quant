@@ -667,3 +667,36 @@ def test_http_status_is_returned_not_raised(monkeypatch):
     monkeypatch.setattr(dr.urllib.request, "urlopen", boom)
     status, _, body = dr._request("https://www.googleapis.com/x")
     assert status == 401 and b"error" in body
+
+
+# --------------------------------------------------------------------------
+# OAuth PKCE round-trip
+# --------------------------------------------------------------------------
+def test_pkce_verifier_is_carried_from_auth_url_to_callback():
+    """google-auth-oauthlib enables PKCE by default, so the auth URL carries a
+    code_challenge. The exchange happens in a later request with a fresh Flow,
+    so the verifier must be stashed with the state nonce -- otherwise Google
+    rejects it with "(invalid_grant) Missing code verifier." and the account
+    silently never connects (observed against the real endpoint)."""
+    import inspect
+    from backend.google_account_manager import GoogleAccountManager
+
+    sig = inspect.signature(GoogleAccountManager.handle_callback)
+    assert "code_verifier" in sig.parameters
+
+    src = inspect.getsource(GoogleAccountManager.handle_callback)
+    # It must be applied to the Flow, not merely accepted and ignored.
+    assert "flow.code_verifier = code_verifier" in src
+
+
+def test_pending_oauth_state_stores_both_account_and_verifier():
+    import inspect
+    import backend.api_server as api
+
+    create = inspect.getsource(api.create_auth_url)
+    assert '"code_verifier"' in create and "flow" in create
+    cb = inspect.getsource(api.oauth_callback)
+    assert 'pending.get("code_verifier")' in cb
+    # The nonce still has to gate the callback -- it is the only proof the
+    # redirect belongs to a flow we started.
+    assert "_pending_oauth.pop(state" in cb
