@@ -59,6 +59,31 @@ CAPABILITIES = [
      "note": "Colab 运行时无法从外部连接，只能靠 worker 轮询；Kaggle 是标准 REST，可直接调度"},
 ]
 
+# Free-tier figures gathered 2026-07 by web search, each tagged with where it
+# came from so the panel never presents a blog number as an official one.
+# "official" = stated on kaggle.com (docs or a Kaggle staff post).
+# The live `kaggle quota` reading always overrides these once a token is placed.
+FREE_TIER = [
+    {"item": "CPU 时长", "value": "不限额", "source": "community",
+     "note": "只受单次会话上限约束，不消耗每周配额。对本项目最关键的一条：入库管道是 CPU 活"},
+    {"item": "GPU 每周配额", "value": "30 小时（保底）", "source": "official",
+     "note": "Kaggle 官方帖原文 we make every effort to provide 30hrs of guaranteed quota each week, and depending on our demand/supply ... our algorithm decides if we can spare to lend out some bonus quota each week"},
+    {"item": "TPU 每周配额", "value": "约 20 小时", "source": "official",
+     "note": "kaggle.com 文档 You can use up to 20 hours per week"},
+    {"item": "单次会话上限", "value": "12 小时（TPU 9 小时）", "source": "conflicting",
+     "note": "多数来源为 CPU/GPU 12h、TPU 9h，但 kaggle.com 论坛也有回答称 9h。这是唯一各来源不一致的数字，以你账号实际表现为准"},
+    {"item": "内存", "value": "约 29–30 GB", "source": "community",
+     "note": "2023 年从 13 GB 提升；同时 CPU 核数从 2 提到 4。约为 Colab 免费档 12.7 GB 的 2.4 倍"},
+    {"item": "持久磁盘", "value": "20 GB", "source": "community",
+     "note": "/kaggle/working 会随 notebook 保存，跨会话保留——与 Colab 会话结束即清空不同"},
+    {"item": "GPU 型号", "value": "P100 16GB 或 T4×2", "source": "community",
+     "note": "免费档可选单张 P100 或双张 T4（各 16GB）"},
+    {"item": "开启 GPU 的前置条件", "value": "需手机验证", "source": "official-ish",
+     "note": "未验证时加速器选项为灰。与 SDK 里的 is_phone_verified 属性一致；一个手机号无法验证大量账号"},
+    {"item": "Colab 订阅联动", "value": "可加时", "source": "official",
+     "note": "kaggle.com 文档原文 Once the account is verified to have an active Colab subscription, you will be granted additional GPU hours。你当前 0 计算单元即无订阅，故不适用"},
+]
+
 DOC_LINKS = [
     {"title": "官方 CLI 仓库", "url": "https://github.com/Kaggle/kaggle-cli"},
     {"title": "kernel-metadata.json 规范", "url": "https://github.com/Kaggle/kaggle-cli/blob/main/docs/kernels_metadata.md"},
@@ -174,6 +199,10 @@ def overview() -> Dict[str, Any]:
     return {
         **quota(),
         "capabilities": CAPABILITIES,
+        "free_tier": FREE_TIER,
+        "free_tier_note": ("以下为 2026-07 联网检索所得，逐条标注来源：official 表示 kaggle.com "
+                           "文档或官方员工帖，community 表示多个第三方来源一致，conflicting 表示各来源不一致。"
+                           "放入令牌后，kaggle quota 的实时读数优先于这张表。"),
         "kernel_states": KERNEL_STATES,
         "doc_links": DOC_LINKS,
     }

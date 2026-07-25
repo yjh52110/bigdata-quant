@@ -253,6 +253,8 @@ const dict = {
   'kg.colRemaining': { zh: '剩余', en: 'Remaining' },
   'kg.pctUsed': { zh: '已用 {p}%', en: '{p}% used' },
   'kg.refresh': { zh: '额度刷新时间', en: 'Quota refreshes' },
+  'kg.freeTierTitle': { zh: '免费档额度（联网检索，逐条标注来源）', en: 'Free-tier limits (web-researched, each tagged with its source)' },
+  'kg.colSource': { zh: '来源', en: 'Source' },
   'kg.capTitle': { zh: '能力核对（取自已安装 CLI 与官方 SDK 类型定义）', en: 'Capabilities (from the installed CLI and official SDK types)' },
   'cw.orphan': { zh: '孤儿会话', en: 'Orphaned' },
   'cw.entTitle': { zh: '本账号实测可用机型', en: 'Machine types this account can obtain' },

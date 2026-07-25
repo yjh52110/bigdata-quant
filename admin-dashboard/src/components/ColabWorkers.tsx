@@ -435,6 +435,27 @@ export default function ColabWorkers() {
             )
           )}
 
+          <h4 className="text-sm font-semibold text-slate-300 mt-5 mb-2">{t('kg.freeTierTitle')}</h4>
+          <p className="text-xs text-slate-500 mb-3">{kaggle.free_tier_note}</p>
+          <ResponsiveTable
+            rows={kaggle.free_tier || []}
+            empty="—"
+            columns={[
+              { key: 'item', header: t('cw.colItem'), cellClass: 'text-slate-200 text-sm', render: (x: any) => x.item },
+              { key: 'value', header: t('cw.colValue'), cellClass: 'text-cyan-300 text-sm', render: (x: any) => x.value },
+              {
+                key: 'src', header: t('kg.colSource'),
+                render: (x: any) => {
+                  const tone = x.source === 'official' ? 'bg-emerald-500/20 text-emerald-400'
+                    : x.source === 'conflicting' ? 'bg-amber-500/20 text-amber-400'
+                    : 'bg-slate-700 text-slate-400';
+                  return <span className={`text-xs px-2 py-1 rounded ${tone}`}>{x.source}</span>;
+                },
+              },
+              { key: 'note', header: t('cw.colNote'), cellClass: 'text-slate-500 text-xs break-words', render: (x: any) => x.note },
+            ]}
+          />
+
           <h4 className="text-sm font-semibold text-slate-300 mt-5 mb-2">{t('kg.capTitle')}</h4>
           <ResponsiveTable
             rows={kaggle.capabilities || []}

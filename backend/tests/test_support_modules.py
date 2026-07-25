@@ -373,3 +373,35 @@ def test_kaggle_panel_states_quota_is_per_kaggle_account_not_google():
     assert "不等于" in by["额度挂在哪"]["note"]
     assert "is_phone_verified" in by["加速器与账号验证"]["note"]
     assert "不用 GPU" in by["对本项目的真实价值"]["note"]
+
+
+def test_free_tier_figures_carry_their_provenance():
+    """Web-researched numbers must not be presentable as official ones. Each
+    row states where it came from, and the one figure sources disagree on is
+    labelled as such rather than silently picked."""
+    from backend.kaggle_control import FREE_TIER
+    assert all(f["source"] in {"official", "official-ish", "community", "conflicting"} for f in FREE_TIER)
+    by = {f["item"]: f for f in FREE_TIER}
+    # The 30h figure is a verbatim Kaggle staff quote, so it may claim official.
+    assert by["GPU 每周配额"]["source"] == "official"
+    assert "30hrs of guaranteed quota" in by["GPU 每周配额"]["note"]
+    # Session length is the number sources contradict each other on.
+    assert by["单次会话上限"]["source"] == "conflicting"
+    # RAM/disk came from third parties only.
+    assert by["内存"]["source"] == "community"
+
+
+def test_free_tier_leads_with_the_fact_that_matters_here():
+    """This pipeline is CPU-bound, so "CPU is unmetered" is the load-bearing
+    fact -- not the GPU hours everyone quotes."""
+    from backend.kaggle_control import FREE_TIER
+    assert FREE_TIER[0]["item"] == "CPU 时长"
+    assert FREE_TIER[0]["value"] == "不限额"
+
+
+def test_live_quota_is_declared_authoritative_over_the_researched_table(monkeypatch):
+    import backend.kaggle_control as k
+    monkeypatch.setattr(k, "quota", lambda: {"available": False, "reason": "not authenticated"})
+    o = k.overview()
+    assert "kaggle quota" in o["free_tier_note"]
+    assert "优先" in o["free_tier_note"]
