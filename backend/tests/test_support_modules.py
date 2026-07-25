@@ -361,3 +361,15 @@ def test_kaggle_capabilities_state_the_colab_contrast():
     blob = " ".join(c["item"] + c["value"] + c["note"] for c in CAPABILITIES)
     assert "kaggle quota" in blob and "kernels push" in blob
     assert "worker" in blob
+
+
+def test_kaggle_panel_states_quota_is_per_kaggle_account_not_google():
+    """A costly assumption: that N Google accounts yield N Kaggle quotas. The
+    CLI itself says a separate Kaggle account is required, so the panel must
+    say it too rather than letting the pool-of-100 idea look viable here."""
+    from backend.kaggle_control import CAPABILITIES
+    by = {c["item"]: c for c in CAPABILITIES}
+    assert "Kaggle 账号" in by["额度挂在哪"]["value"]
+    assert "不等于" in by["额度挂在哪"]["note"]
+    assert "is_phone_verified" in by["加速器与账号验证"]["note"]
+    assert "不用 GPU" in by["对本项目的真实价值"]["note"]

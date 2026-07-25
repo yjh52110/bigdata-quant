@@ -44,6 +44,17 @@ CAPABILITIES = [
      "note": "kaggle kernels push -p <目录> --accelerator <型号> -t <秒>，再用 status / logs / output 轮询取回；不需要常驻 worker"},
     {"item": "免费存储", "value": "datasets",
      "note": "kaggle datasets create / version 可程序化建库与增量发版，作为数据落地位置"},
+    # Easy and costly assumption to get wrong: quota is attached to the Kaggle
+    # account, not the Google account used to sign in. The CLI says so itself
+    # ("First, you will need a Kaggle account"). N Google accounts therefore do
+    # NOT yield N quotas -- and registering N Kaggle accounts runs into the same
+    # one-account-per-person rule that Colab states outright.
+    {"item": "额度挂在哪", "value": "Kaggle 账号，不是谷歌号",
+     "note": "谷歌号只用于登录；CLI 原文 First, you will need a Kaggle account。有 N 个谷歌号不等于有 N 份额度"},
+    {"item": "加速器与账号验证", "value": "受账号验证约束",
+     "note": "SDK 有 is_phone_verified 账号属性；一个手机号无法验证大量账号，多账号扩额度与 Colab 同属违规方向"},
+    {"item": "对本项目的真实价值", "value": "可调度，而非更多 GPU",
+     "note": "本管道是 DuckDB 聚合与 parquet 写入，吃 CPU 与带宽、不用 GPU。Kaggle 的价值在于能被外部直接派发，一个账号即可"},
     {"item": "与 Colab 的关键差别", "value": "可被主动调用",
      "note": "Colab 运行时无法从外部连接，只能靠 worker 轮询；Kaggle 是标准 REST，可直接调度"},
 ]
