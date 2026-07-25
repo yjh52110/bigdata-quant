@@ -241,6 +241,7 @@ const dict = {
   'cw.colMachine': { zh: '机器 ID', en: 'Machine' },
   'cw.colHardware': { zh: '硬件', en: 'Hardware' },
   'cw.colState': { zh: '状态 / 最后执行', en: 'State / last exec' },
+  'cw.orphan': { zh: '孤儿会话', en: 'Orphaned' },
   'cw.entTitle': { zh: '本账号实测可用机型', en: 'Machine types this account can obtain' },
   'cw.entNote': {
     zh: '没有任何接口能查询账号权限，所以这里的结果是逐个真实申请一遍机型、记录后端是否接受得来的。',

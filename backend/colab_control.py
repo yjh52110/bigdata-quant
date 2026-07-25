@@ -9,8 +9,12 @@ What can and cannot be shown, so the UI never invents numbers:
   can    -- CLI installed/authenticated, active sessions and their hardware,
             the hardware variants the CLI accepts, measured specs of a live
             session, and the documented limits
-  cannot -- remaining quota. Google publishes no figure and offers no
-            endpoint; the FAQ states limits "sometimes fluctuate".
+  cannot -- remaining quota as a number a program can read. The notebook UI
+            *does* show an account-specific projection ("this runtime may last
+            up to 68h20m at your current usage level"), but nothing exposes it:
+            introspecting google.colab in a live session turns up no quota,
+            usage, limit or duration symbol at all. So it is surfaced here as a
+            measured observation with its source named, never as a live value.
 """
 
 import json
@@ -42,8 +46,16 @@ DOCUMENTED_LIMITS = [
      "note": "关闭浏览器标签页同样会断"},
     {"item": "本地磁盘", "value": "会话结束清空",
      "note": "要保留的数据必须写入云盘"},
-    {"item": "配额数值", "value": "官方不公布",
-     "note": "原文 resources are not guaranteed and not unlimited, usage limits sometimes fluctuate"},
+    {"item": "配额数值", "value": "网页端可见 / 代码读不到",
+     "note": "网页端资源面板会按当前用量给出预计可持续时长；但在运行会话里遍历 google.colab 全部公开接口，没有任何 quota/usage/limit/duration 符号，CLI 也没有对应命令"},
+    {"item": "预计可持续时长（实测观测）", "value": "CPU 68h20m / GPU(T4) 4h50m",
+     "note": "2026-07 免费档网页端读数，同一账号 GPU 比 CPU 少一个量级；官方原文 usage limits sometimes fluctuate，故只作观测值不作承诺"},
+    {"item": "云盘 FUSE 挂载", "value": "头无交互不可用",
+     "note": "colab drivemount / drive.mount() 需要网页端点授权弹窗，headless 下报 ValueError: mount failed"},
+    {"item": "云盘 REST API", "value": "可达（实测 33.8ms）",
+     "note": "Colab 内访问 www.googleapis.com/drive/v3 返回 401 missing authentication credential，即链路通、仅缺令牌——本项目走的正是这条路，不依赖 FUSE"},
+    {"item": "孤儿会话", "value": "CLI 关不掉",
+     "note": "colab stop 靠本地 sessions.json 解析会话名；该文件丢失后服务端仍在跑的会话在列表里显示为 [?]，只能到网页端「管理会话」终止"},
     {"item": "多账号扩额度", "value": "明确禁止",
      "note": "禁止清单原文 using multiple accounts to work around access or resource usage restrictions"},
     # Verified from the CLI's own command list: `pay` is described as "Open the
@@ -137,6 +149,23 @@ _LAST_EXEC_RE = re.compile(r"Last Execution:\s*(.+?)\s*$", re.M)
 MAX_STATUS_LOOKUPS = 8
 
 
+def _local_session_names() -> set:
+    """Names the CLI still has a local mapping for.
+
+    `colab sessions` queries the server, but `colab stop` resolves the name
+    through this local file. If it is lost or reset, a running session shows up
+    in the listing as [?] and becomes unstoppable from the CLI -- it then burns
+    free-tier allowance until the idle timeout. Only the keys are read; no
+    values, and never the sibling token file.
+    """
+    try:
+        with open(os.path.join(STATE_DIR, "sessions.json")) as f:
+            data = json.load(f)
+        return set(data.keys()) if isinstance(data, dict) else set()
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return set()
+
+
 def session_status(name: str) -> Dict[str, Any]:
     """IDLE/BUSY plus last-execution time for one session."""
     r = _run(["status", "-s", name], timeout=20)
@@ -165,9 +194,22 @@ def list_sessions() -> Dict[str, Any]:
         {"name": m.group(1), "machine": m.group(2), "hardware": m.group(3), "variant": m.group(4)}
         for m in _SESSION_RE.finditer(r["out"])
     ]
+    local = _local_session_names()
+    for s in sessions:
+        # [?] means the server has it but the CLI lost the name mapping.
+        s["orphan"] = s["name"] == "?" or s["name"] not in local
     for s in sessions[:MAX_STATUS_LOOKUPS]:
-        s.update(session_status(s["name"]))
-    return {"available": True, "sessions": sessions, "count": len(sessions), **status}
+        if not s["orphan"]:
+            s.update(session_status(s["name"]))
+    orphans = sum(1 for s in sessions if s["orphan"])
+    return {
+        "available": True, "sessions": sessions, "count": len(sessions),
+        "orphan_count": orphans,
+        "orphan_hint": ("有会话在服务端仍在运行，但 CLI 已丢失本地名称映射，无法用 colab stop 关闭。"
+                        "请到 Colab 网页端「管理会话」手动终止，否则它会一直占用免费额度直到空闲超时。")
+                       if orphans else None,
+        **status,
+    }
 
 
 _PROBE = (
@@ -274,5 +316,7 @@ def overview() -> Dict[str, Any]:
         "doc_links": DOC_LINKS,
         # Stated explicitly so the UI never shows a fabricated quota figure.
         "quota_available": False,
-        "quota_note": "Google 不公布 Colab 配额数值，也不提供查询接口。此处只显示实测值与官方文档条款。",
+        "quota_note": ("配额数字只在 Colab 网页端资源面板显示，CLI、REST 与运行时里的 "
+                       "google.colab 都读不到（已逐一核对）。此处只显示实测值、网页端观测值"
+                       "与官方文档条款，不做任何推算。"),
     }

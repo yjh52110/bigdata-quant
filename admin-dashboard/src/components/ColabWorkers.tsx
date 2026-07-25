@@ -126,6 +126,11 @@ export default function ColabWorkers() {
           {colab.auth_hint && <p className="text-xs text-amber-300 mb-3">{colab.auth_hint}</p>}
           {colab.reason && !colab.available && <p className="text-xs text-red-400 mb-3 font-mono break-words">{colab.reason}</p>}
 
+          {colab.orphan_hint && (
+            <p className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded p-3 mb-3">
+              {colab.orphan_hint}
+            </p>
+          )}
           <h4 className="text-sm font-semibold text-slate-300 mb-2">{t('cw.liveSessions', { n: colab.sessions?.length ?? 0 })}</h4>
           <ResponsiveTable
             rows={colab.sessions || []}
@@ -138,7 +143,9 @@ export default function ColabWorkers() {
                 key: 'state', header: t('cw.colState'), cellClass: 'text-sm',
                 render: (x: any) => (
                   <span className="inline-flex flex-col items-end sm:items-start">
-                    <span className={x.status === 'BUSY' ? 'text-amber-400' : 'text-emerald-400'}>{x.status || '—'}</span>
+                    {x.orphan
+                      ? <span className="text-xs px-2 py-1 rounded bg-amber-500/20 text-amber-400">{t('cw.orphan')}</span>
+                      : <span className={x.status === 'BUSY' ? 'text-amber-400' : 'text-emerald-400'}>{x.status || '—'}</span>}
                     {x.last_execution && <span className="text-xs text-slate-500 break-words">{x.last_execution}</span>}
                   </span>
                 ),
@@ -149,7 +156,7 @@ export default function ColabWorkers() {
                   const r = probeResult[x.name];
                   return (
                     <span className="inline-flex flex-col items-end gap-1">
-                      <button onClick={() => probe(x.name)} disabled={probing === x.name}
+                      <button onClick={() => probe(x.name)} disabled={probing === x.name || x.orphan}
                         className="text-xs px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded border bg-blue-500/20 border-blue-500/40 text-blue-300 disabled:opacity-50">
                         {probing === x.name ? t('cw.probing') : t('cw.probeBtn')}
                       </button>

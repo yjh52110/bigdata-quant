@@ -238,3 +238,62 @@ def test_plans_carry_no_invented_burn_rate():
     assert "读不到" in UNITS_EXPIRY_NOTE
     assert any("100" in p["units"] for p in PLANS)   # Pro, from the official page
     assert any("600" in p["units"] for p in PLANS)   # Pro+
+
+
+def test_drive_access_path_distinguishes_fuse_from_rest_api():
+    """Measured in a live session: colab drivemount fails headless (needs the
+    notebook consent popup) while the Drive REST API answers in 33.8ms with a
+    plain 401. Conflating the two would wrongly suggest Colab can't reach
+    Drive at all -- this project's worker uses the REST path, not FUSE."""
+    from backend.colab_control import DOCUMENTED_LIMITS
+    by = {d["item"]: d for d in DOCUMENTED_LIMITS}
+    assert "不可用" in by["云盘 FUSE 挂载"]["value"]
+    assert "可达" in by["云盘 REST API"]["value"]
+    assert "mount failed" in by["云盘 FUSE 挂载"]["note"]
+
+
+def test_quota_note_does_not_claim_the_figure_is_unpublished():
+    """Earlier wording said Google "doesn't publish" a quota figure. The
+    notebook UI does show an account-specific projection; what's true is that
+    no interface exposes it. Keep the distinction so the panel stays accurate."""
+    from backend.colab_control import DOCUMENTED_LIMITS
+    by = {d["item"]: d for d in DOCUMENTED_LIMITS}
+    assert "网页端可见" in by["配额数值"]["value"]
+    assert "不公布" not in by["配额数值"]["value"]
+    assert "google.colab" in by["配额数值"]["note"]
+
+
+def test_orphaned_session_is_flagged_not_silently_listed(monkeypatch):
+    """A session the server still runs but the CLI lost the name mapping for
+    shows as [?] and cannot be stopped from the CLI, quietly burning free-tier
+    allowance. It must be flagged, and must not be offered a probe button
+    (the probe resolves the same missing name)."""
+    import backend.colab_control as c
+    monkeypatch.setattr(c, "cli_status", lambda: {"installed": True, "version": "0.6.0",
+                                                 "authenticated": True, "auth_hint": None})
+    monkeypatch.setattr(c, "_run", lambda a, timeout=0: {
+        "ok": True, "err": "",
+        "out": ("[?] m-s-kkb-use1d0-1zu6p7qmd860k | Hardware: CPU | Variant: DEFAULT\n"
+                "[mine] m-s-kkb-usc1b1-aaa | Hardware: CPU | Variant: DEFAULT")})
+    monkeypatch.setattr(c, "_local_session_names", lambda: {"mine"})
+    monkeypatch.setattr(c, "session_status", lambda n: {"status": "IDLE", "last_execution": None})
+
+    r = c.list_sessions()
+    by = {s["name"]: s for s in r["sessions"]}
+    assert by["?"]["orphan"] is True
+    assert by["mine"]["orphan"] is False
+    assert r["orphan_count"] == 1
+    assert "网页端" in r["orphan_hint"]
+    # Status is only looked up for sessions the CLI can actually address.
+    assert "status" not in by["?"] and by["mine"]["status"] == "IDLE"
+
+
+def test_no_orphans_means_no_warning(monkeypatch):
+    import backend.colab_control as c
+    monkeypatch.setattr(c, "cli_status", lambda: {"installed": True, "version": "0.6.0",
+                                                 "authenticated": True, "auth_hint": None})
+    monkeypatch.setattr(c, "_run", lambda a, timeout=0: {
+        "ok": True, "err": "", "out": "[mine] m-x | Hardware: CPU | Variant: DEFAULT"})
+    monkeypatch.setattr(c, "_local_session_names", lambda: {"mine"})
+    monkeypatch.setattr(c, "session_status", lambda n: {"status": "IDLE", "last_execution": None})
+    assert c.list_sessions()["orphan_hint"] is None
