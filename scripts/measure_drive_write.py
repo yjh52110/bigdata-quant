@@ -114,7 +114,7 @@ def main() -> int:
     print(f"派发 {username}/{slug} ...")
     try:
         job = kd.dispatch(username, slug, params, title="ChainQuant drive write measurement",
-                          timeout="30m")
+                          timeout=1800)
     except kd.DispatchError as e:
         print(f"派发失败: {e}", file=sys.stderr)
         return 1

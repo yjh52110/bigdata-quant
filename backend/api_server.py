@@ -573,7 +573,7 @@ class KaggleDispatchRequest(BaseModel):
     symbol: str = "BTCUSDT"
     interval: str = "1m"
     months: list[str] = []
-    timeout: str | None = None
+    timeout: int | None = None
 
 
 @app.post("/api/kaggle/dispatch")

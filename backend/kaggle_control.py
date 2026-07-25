@@ -76,10 +76,23 @@ FREE_TIER = [
      "note": "2023 年从 13 GB 提升；同时 CPU 核数从 2 提到 4。约为 Colab 免费档 12.7 GB 的 2.4 倍"},
     {"item": "持久磁盘", "value": "20 GB", "source": "community",
      "note": "/kaggle/working 会随 notebook 保存，跨会话保留——与 Colab 会话结束即清空不同"},
+    {"item": "本账号当前状态", "value": "未手机验证 → 无联网、无 GPU/TPU", "source": "measured",
+     "note": "额度表虽显示 30h/20h，但在完成手机验证前都用不上；本项目的入库任务需要联网，因此 Kaggle 路径在此之前不可用"},
     {"item": "GPU 型号", "value": "P100 16GB 或 T4×2", "source": "community",
      "note": "免费档可选单张 P100 或双张 T4（各 16GB）"},
-    {"item": "开启 GPU 的前置条件", "value": "需手机验证", "source": "official-ish",
-     "note": "未验证时加速器选项为灰。与 SDK 里的 is_phone_verified 属性一致；一个手机号无法验证大量账号"},
+    {"item": "联网前置条件", "value": "需手机验证", "source": "official",
+     "note": "Kaggle 笔记本设置页原文 Want more power? Access GPU/TPU at no cost or turn on an "
+             "internet connection. Get phone verified。未验证时 Internet 开关为灰且不可点，"
+             "metadata 里写 enable_internet: true 也无效——已实测：kernel 内 DNS 直接不通"},
+    {"item": "开启 GPU 的前置条件", "value": "需手机验证", "source": "official",
+     "note": "同上一条，同一个验证同时管 GPU/TPU 与联网；与 SDK 里的 is_phone_verified 属性一致"},
+    {"item": "使用 TPU 的额外条件", "value": "需身份验证", "source": "official",
+     "note": "设置页原文 Additionally, using a TPU requires identity verification"},
+    {"item": "运行时规格（实测）", "value": "4 vCPU / 31.3 GB", "source": "measured",
+     "note": "2026-07-25 在真实 kernel 内测得，印证了社区所说的约 30GB；为 Colab 免费档 12.7GB 的 2.5 倍"},
+    {"item": "Secrets 机制（实测）", "value": "可用", "source": "measured",
+     "note": "kernel 内 kaggle_secrets.UserSecretsClient 可导入，含 get_secret / get_gcloud_credential / "
+             "set_tensorflow_credential 等方法"},
     {"item": "Colab 订阅联动", "value": "可加时", "source": "official",
      "note": "kaggle.com 文档原文 Once the account is verified to have an active Colab subscription, you will be granted additional GPU hours。你当前 0 计算单元即无订阅，故不适用"},
 ]
@@ -94,9 +107,11 @@ DRIVE_ACCESS = [
     {"platform": "Colab", "method": "Drive REST API", "works": True, "verified": True,
      "note": "实测 33.8ms 返回 401 missing authentication credential——链路通、仅缺令牌。本项目走的正是这条"},
     {"platform": "Kaggle", "method": "FUSE 挂载", "works": False, "verified": True,
-     "note": "Kaggle 根本没有这个功能：google.colab.drive 是 Colab 专有模块，在 Kaggle 里直接 KeyError"},
-    {"platform": "Kaggle", "method": "Drive REST API", "works": True, "verified": False,
-     "note": "enable_internet 开启后允许任意出网，凭证经 Kaggle Secrets 注入。尚未实测——放入令牌后派发一次 drivecheck 任务即可验证并测速"},
+     "note": "Kaggle 没有挂载方案。注：google.colab 模块本身在 Kaggle 里能 import（实测 true），"
+             "不能用的是 drive.mount()——此前本表写成「import 就 KeyError」，是错的，已按实测更正"},
+    {"platform": "Kaggle", "method": "Drive REST API", "works": False, "verified": True,
+     "note": "实测被出网限制挡住，不是机制问题：kernel 内访问 googleapis.com 与 oauth2.googleapis.com "
+             "均返回 Temporary failure in name resolution，连 DNS 都不通。原因见下方「联网前置条件」"},
 ]
 
 DOC_LINKS = [
@@ -149,29 +164,65 @@ def _num(v: Any) -> Optional[float]:
         return None
 
 
-def _normalise(block: Any) -> Dict[str, Any]:
-    """Maps one accelerator's quota to hours, keeping the raw values.
+_HOURS_RE = re.compile(r"^\s*([\d.]+)\s*h\s*$", re.I)
 
-    The CLI reports seconds; hours is what the UI shows, so convert once here
-    rather than in the component. Missing fields stay None instead of 0 so an
-    absent value can't read as "no quota left".
+
+def _hours(v: Any) -> Optional[float]:
+    """Parses an hour figure from either the CLI's "30.00h" or a raw number."""
+    if isinstance(v, str):
+        m = _HOURS_RE.match(v)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+        return None
+    return _num(v)
+
+
+def _normalise(block: Any) -> Dict[str, Any]:
+    """One accelerator's quota, in hours.
+
+    Two shapes have to be handled, and only real output revealed the second:
+
+      CLI v2.2.4   {"resource": "GPU", "used": "0.00h", "remaining": "30.00h",
+                    "total": "30.00h", "refreshAt": "..."}
+      SDK types    {"timeUsed": <seconds>, "totalTimeAllowed": <seconds>, ...}
+
+    The SDK's ApiAcceleratorQuota is what the API returns, but the CLI formats
+    it into hour strings before printing, so parsing only the SDK shape yielded
+    an empty panel against a live account. Missing values stay None rather than
+    0 so "unknown" can't render as "exhausted".
     """
     if not isinstance(block, dict):
         return {}
-    used = _num(block.get("timeUsed", block.get("time_used")))
-    total = _num(block.get("totalTimeAllowed", block.get("total_time_allowed")))
-    reserved = _num(block.get("timeReserved", block.get("time_reserved")))
-    out: Dict[str, Any] = {
-        "used_s": used, "total_s": total, "reserved_s": reserved,
-        "has_ever_run": block.get("hasEverRun", block.get("has_ever_run")),
-    }
-    if used is not None:
-        out["used_h"] = round(used / 3600, 1)
-    if total is not None:
-        out["total_h"] = round(total / 3600, 1)
-    if used is not None and total is not None:
-        out["remaining_h"] = round(max(0.0, total - used) / 3600, 1)
-        out["pct_used"] = round(used / total * 100, 1) if total else None
+
+    out: Dict[str, Any] = {}
+    # Preferred: the CLI's own formatted output.
+    used_h = _hours(block.get("used"))
+    total_h = _hours(block.get("total"))
+    remaining_h = _hours(block.get("remaining"))
+
+    if used_h is None and total_h is None:
+        # Fall back to the raw SDK field names, which are in seconds.
+        used_s = _num(block.get("timeUsed", block.get("time_used")))
+        total_s = _num(block.get("totalTimeAllowed", block.get("total_time_allowed")))
+        used_h = None if used_s is None else used_s / 3600
+        total_h = None if total_s is None else total_s / 3600
+        out["has_ever_run"] = block.get("hasEverRun", block.get("has_ever_run"))
+
+    if used_h is not None:
+        out["used_h"] = round(used_h, 2)
+    if total_h is not None:
+        out["total_h"] = round(total_h, 2)
+    if remaining_h is None and used_h is not None and total_h is not None:
+        remaining_h = max(0.0, total_h - used_h)
+    if remaining_h is not None:
+        out["remaining_h"] = round(remaining_h, 2)
+    if used_h is not None and total_h:
+        out["pct_used"] = round(used_h / total_h * 100, 1)
+    if block.get("refreshAt"):
+        out["refresh_at"] = block["refreshAt"]
     return out
 
 
@@ -197,14 +248,26 @@ def quota() -> Dict[str, Any]:
     except json.JSONDecodeError as e:
         return {"available": False, "reason": f"could not parse quota JSON: {e}", **status}
 
+    # The CLI prints a list of per-resource rows; the raw API returns one object
+    # with gpuQuota/tpuQuota members. Support both rather than assuming.
+    gpu = tpu = {}
+    refresh = None
     if isinstance(data, list):
-        data = data[0] if data else {}
+        by_resource = {str(r.get("resource", "")).upper(): r
+                       for r in data if isinstance(r, dict)}
+        gpu = _normalise(by_resource.get("GPU"))
+        tpu = _normalise(by_resource.get("TPU"))
+        refresh = gpu.get("refresh_at") or tpu.get("refresh_at")
+    elif isinstance(data, dict):
+        gpu = _normalise(data.get("gpuQuota", data.get("gpu_quota")))
+        tpu = _normalise(data.get("tpuQuota", data.get("tpu_quota")))
+        refresh = data.get("quotaRefreshTime", data.get("quota_refresh_time"))
 
     return {
         "available": True,
-        "refresh_time": data.get("quotaRefreshTime", data.get("quota_refresh_time")),
-        "gpu": _normalise(data.get("gpuQuota", data.get("gpu_quota"))),
-        "tpu": _normalise(data.get("tpuQuota", data.get("tpu_quota"))),
+        "refresh_time": refresh,
+        "gpu": gpu,
+        "tpu": tpu,
         "raw": data,
         **status,
     }

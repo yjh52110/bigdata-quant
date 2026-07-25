@@ -586,7 +586,8 @@ export default function ColabWorkers() {
               {
                 key: 'src', header: t('kg.colSource'),
                 render: (x: any) => {
-                  const tone = x.source === 'official' ? 'bg-emerald-500/20 text-emerald-400'
+                  const tone = x.source === 'measured' ? 'bg-blue-500/20 text-blue-300'
+                    : x.source === 'official' ? 'bg-emerald-500/20 text-emerald-400'
                     : x.source === 'conflicting' ? 'bg-amber-500/20 text-amber-400'
                     : 'bg-slate-700 text-slate-400';
                   return <span className={`text-xs px-2 py-1 rounded ${tone}`}>{x.source}</span>;

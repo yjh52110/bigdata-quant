@@ -276,12 +276,29 @@ def render_script(params: Dict[str, Any]) -> str:
     return _INGEST_SCRIPT.replace("__PARAMS__", json.dumps(params).replace('"""', '\\"\\"\\"'))
 
 
+# Prefer the URL Kaggle prints, because the slug it actually used may differ
+# from the one we asked for (see _slugify below).
+_URL_REF_RE = re.compile(r"kaggle\.com/(?:code|kernels/scripts)/([\w-]+/[\w-]+)", re.I)
 _REF_RE = re.compile(r"(?:ref|url)\D*([\w-]+/[\w-]+)", re.I)
 _VERSION_RE = re.compile(r"version\s*(\d+)", re.I)
 
 
+def _slugify(title: str) -> str:
+    """Kaggle's slug derivation, needed because it wins over metadata `id`.
+
+    Observed: pushing id=yjh980/cq-drivecheck with title="ChainQuant drive
+    connectivity check" created yjh980/chainquant-drive-connectivity-check, and
+    every later `kernels status`/`output` call on the requested id failed with
+    "Permission 'kernels.get' was denied". The push does warn -- "Your kernel
+    title does not resolve to the specified id" -- so the two must be kept
+    consistent rather than set independently.
+    """
+    out = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return re.sub(r"-{2,}", "-", out)
+
+
 def dispatch(username: str, slug: str, params: Dict[str, Any], *,
-             title: Optional[str] = None, timeout: Optional[str] = None,
+             title: Optional[str] = None, timeout: Optional[int] = None,
              enable_gpu: bool = False, enable_tpu: bool = False) -> Dict[str, Any]:
     """Pushes one job and records it. Returns immediately -- Kaggle queues it."""
     st = cli_status()
@@ -300,25 +317,36 @@ def dispatch(username: str, slug: str, params: Dict[str, Any], *,
         # truth shared with the Colab worker.
         shutil.copy(os.path.join(os.path.dirname(__file__), "drive_rest.py"),
                     os.path.join(folder, "drive_rest.py"))
-        meta = build_metadata(username, slug, title or slug, code_file,
+        # If the caller's title would slugify to something else, Kaggle would
+        # silently file the kernel under that instead, orphaning our handle.
+        effective_title = title or slug
+        if _slugify(effective_title) != slug:
+            logging.info(
+                f"title {effective_title!r} slugifies to {_slugify(effective_title)!r}, "
+                f"not {slug!r}; using the slug as the title so the ref stays valid")
+            effective_title = slug
+        meta = build_metadata(username, slug, effective_title, code_file,
                               enable_gpu=enable_gpu, enable_tpu=enable_tpu)
         with open(os.path.join(folder, "kernel-metadata.json"), "w") as f:
             json.dump(meta, f, indent=2)
 
         args = ["kernels", "push", "-p", folder]
         if timeout:
-            # The CLI accepts duration strings ("2h", "30s", "2h30s"), not just
-            # a bare number of seconds.
-            args += ["-t", str(timeout)]
+            # Seconds only. `kernels push -t` is argparse type=int: passing a
+            # duration string such as "15m" is rejected outright. (Other
+            # commands do accept "1h"/"30s" forms -- this one does not.)
+            args += ["-t", str(int(timeout))]
         r = _run(args, timeout=PUSH_TIMEOUT_S)
         text = (r["out"] + r["err"]).strip()
         if not r["ok"]:
             raise DispatchError(text[:400] or "kernels push failed")
 
+        url_m = _URL_REF_RE.search(text)
         ref_m = _REF_RE.search(text)
         ver_m = _VERSION_RE.search(text)
         job = {
-            "ref": ref_m.group(1) if ref_m else f"{username}/{slug}",
+            # URL first: it is what Kaggle actually created.
+            "ref": url_m.group(1) if url_m else (ref_m.group(1) if ref_m else f"{username}/{slug}"),
             "version": int(ver_m.group(1)) if ver_m else None,
             "slug": slug,
             "params": params,
@@ -326,6 +354,9 @@ def dispatch(username: str, slug: str, params: Dict[str, Any], *,
             "status": "QUEUED",
             "push_output": text[:400],
         }
+        if "does not resolve to the specified id" in text:
+            # Should be unreachable now, but surface it rather than hide it.
+            job["warning"] = "kaggle reported a title/id slug mismatch"
         jobs = _load_jobs()
         jobs.append(job)
         _save_jobs(jobs)

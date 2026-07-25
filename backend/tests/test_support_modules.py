@@ -324,12 +324,14 @@ def test_kaggle_quota_seconds_convert_to_hours(monkeypatch):
     assert q["remaining_h"] == 21.0 and q["pct_used"] == 30.0
 
 
-def test_missing_quota_field_stays_none_not_zero():
+def test_missing_quota_field_stays_absent_not_zero():
     """A missing total must not render as 0 h, which would read as "quota
     exhausted" when the real state is "unknown"."""
     from backend.kaggle_control import _normalise
     q = _normalise({"timeUsed": 100})
-    assert q["total_s"] is None and "remaining_h" not in q
+    assert "total_h" not in q
+    assert "remaining_h" not in q
+    assert "pct_used" not in q
 
 
 def test_kaggle_snake_and_camel_field_names_both_parse():
@@ -380,7 +382,8 @@ def test_free_tier_figures_carry_their_provenance():
     row states where it came from, and the one figure sources disagree on is
     labelled as such rather than silently picked."""
     from backend.kaggle_control import FREE_TIER
-    assert all(f["source"] in {"official", "official-ish", "community", "conflicting"} for f in FREE_TIER)
+    assert all(f["source"] in {"measured", "official", "official-ish", "community", "conflicting"}
+               for f in FREE_TIER)
     by = {f["item"]: f for f in FREE_TIER}
     # The 30h figure is a verbatim Kaggle staff quote, so it may claim official.
     assert by["GPU 每周配额"]["source"] == "official"
@@ -515,9 +518,10 @@ def test_refresh_only_polls_jobs_that_are_still_running(monkeypatch, tmp_path):
 
 
 def test_drive_access_separates_measured_from_inferred():
-    """Colab's two rows were measured in a live runtime; Kaggle's REST row is
-    inferred from enable_internet and must stay flagged unverified until a
-    drivecheck job actually runs, so the panel can't overstate what we know."""
+    """Every row is now measured in a live runtime -- Colab's two directly, and
+    Kaggle's once a drivecheck kernel actually ran. The point of the test is
+    that `verified` tracks whether a measurement happened, so a row may only
+    claim it after one did."""
     from backend.kaggle_control import DRIVE_ACCESS
     by = {(d["platform"], d["method"]): d for d in DRIVE_ACCESS}
     assert by[("Colab", "Drive REST API")] == {
@@ -528,7 +532,10 @@ def test_drive_access_separates_measured_from_inferred():
     # Kaggle has no FUSE at all -- a different reason from Colab's, so the note
     # must not be copied across.
     assert "KeyError" in by[("Kaggle", "FUSE 挂载")]["note"]
-    assert by[("Kaggle", "Drive REST API")]["verified"] is False
+    kaggle_rest = by[("Kaggle", "Drive REST API")]
+    assert kaggle_rest["verified"] is True          # a drivecheck kernel ran
+    assert kaggle_rest["works"] is False            # and it found egress closed
+    assert all(d["verified"] for d in DRIVE_ACCESS)
 
 
 def test_drivecheck_job_probes_all_four_unknowns():
@@ -734,3 +741,109 @@ def test_measure_script_never_touches_either_credential():
                       "GoogleAccountManager", "export_drive_secret",
                       "credentials.json", ".kaggle/kaggle.json"):
         assert forbidden not in code, f"{forbidden} must not appear in executable code"
+
+
+def test_push_timeout_is_seconds_not_a_duration_string(monkeypatch, tmp_path):
+    """`kernels push -t` is argparse type=int. A duration string like "15m" is
+    rejected before the push happens (observed against the real CLI), so the
+    value must be coerced to whole seconds."""
+    import backend.kaggle_dispatch as kd
+    seen = {}
+    monkeypatch.setattr(kd, "JOBS_FILE", str(tmp_path / "jobs.json"))
+    monkeypatch.setattr(kd, "cli_status", lambda: {
+        "installed": True, "authenticated": True, "auth_hint": None})
+
+    def fake_run(args, timeout=0):
+        seen["args"] = args
+        return {"ok": True, "out": "Kernel version 1 successfully pushed", "err": ""}
+
+    monkeypatch.setattr(kd, "_run", fake_run)
+    kd.dispatch("u", "cq-test-slug", {"kind": "drivecheck"}, timeout=900)
+    i = seen["args"].index("-t")
+    assert seen["args"][i + 1] == "900"
+    int(seen["args"][i + 1])   # must parse as an int, as argparse will
+
+
+def test_quota_parses_the_clis_actual_hour_strings():
+    """Real output is a list of rows with "30.00h" strings, not the SDK's
+    seconds-based object. Parsing only the latter produced an empty panel
+    against a live account."""
+    from backend.kaggle_control import _normalise
+    q = _normalise({"resource": "GPU", "used": "4.50h", "remaining": "25.50h",
+                    "total": "30.00h", "refreshAt": "2026-08-01T00:00:00"})
+    assert q["used_h"] == 4.5 and q["total_h"] == 30.0
+    assert q["remaining_h"] == 25.5 and q["pct_used"] == 15.0
+    assert q["refresh_at"] == "2026-08-01T00:00:00"
+
+
+def test_quota_still_parses_the_sdk_seconds_shape():
+    from backend.kaggle_control import _normalise
+    q = _normalise({"timeUsed": 3600 * 9, "totalTimeAllowed": 3600 * 30})
+    assert q["used_h"] == 9.0 and q["total_h"] == 30.0 and q["remaining_h"] == 21.0
+
+
+def test_kernel_title_is_kept_consistent_with_the_slug(monkeypatch, tmp_path):
+    """Kaggle derives the kernel's slug from the TITLE, not from metadata `id`.
+    Observed: id=yjh980/cq-drivecheck with title "ChainQuant drive connectivity
+    check" created yjh980/chainquant-drive-connectivity-check, after which every
+    status/output call on the requested ref failed with "Permission
+    'kernels.get' was denied"."""
+    import json as _json
+    import os
+    import backend.kaggle_dispatch as kd
+
+    seen = {}
+    monkeypatch.setattr(kd, "JOBS_FILE", str(tmp_path / "jobs.json"))
+    monkeypatch.setattr(kd, "cli_status", lambda: {
+        "installed": True, "authenticated": True, "auth_hint": None})
+
+    def fake_run(args, timeout=0):
+        folder = args[args.index("-p") + 1]
+        with open(os.path.join(folder, "kernel-metadata.json")) as f:
+            seen["meta"] = _json.load(f)
+        return {"ok": True, "out": "Kernel version 1 successfully pushed", "err": ""}
+
+    monkeypatch.setattr(kd, "_run", fake_run)
+    kd.dispatch("u", "cq-drivecheck", {"kind": "drivecheck"},
+                title="ChainQuant drive connectivity check")
+    # The prose title would slugify elsewhere, so the slug must be used instead.
+    assert seen["meta"]["title"] == "cq-drivecheck"
+    assert kd._slugify(seen["meta"]["title"]) == "cq-drivecheck"
+
+
+def test_ref_comes_from_the_url_kaggle_prints(monkeypatch, tmp_path):
+    """Kaggle's URL is authoritative about which kernel it actually created."""
+    import backend.kaggle_dispatch as kd
+    monkeypatch.setattr(kd, "JOBS_FILE", str(tmp_path / "jobs.json"))
+    monkeypatch.setattr(kd, "cli_status", lambda: {
+        "installed": True, "authenticated": True, "auth_hint": None})
+    monkeypatch.setattr(kd, "_run", lambda a, timeout=0: {
+        "ok": True, "err": "",
+        "out": "Kernel version 2 successfully pushed. Please check progress at "
+               "https://www.kaggle.com/code/yjh980/chainquant-drive-check"})
+    job = kd.dispatch("yjh980", "cq-other-slug", {"kind": "drivecheck"})
+    assert job["ref"] == "yjh980/chainquant-drive-check"
+
+
+def test_panel_records_that_kaggle_internet_needs_phone_verification():
+    """Measured: enable_internet:true has no effect on an unverified account --
+    DNS itself fails inside the kernel. Without this row the empty results look
+    like a bug in our code."""
+    from backend.kaggle_control import FREE_TIER, DRIVE_ACCESS
+    by = {f["item"]: f for f in FREE_TIER}
+    assert "手机验证" in by["联网前置条件"]["value"]
+    assert "Get phone verified" in by["联网前置条件"]["note"]
+    rest = next(d for d in DRIVE_ACCESS
+                if d["platform"] == "Kaggle" and "REST" in d["method"])
+    assert rest["works"] is False and rest["verified"] is True
+    assert "name resolution" in rest["note"]
+
+
+def test_the_wrong_google_colab_claim_was_corrected():
+    """An earlier row claimed importing google.colab raises in Kaggle. Measured
+    true. Only drive.mount() is unusable."""
+    from backend.kaggle_control import DRIVE_ACCESS
+    fuse = next(d for d in DRIVE_ACCESS
+                if d["platform"] == "Kaggle" and "FUSE" in d["method"])
+    assert "能 import" in fuse["note"]
+    assert "KeyError" not in fuse["note"].split("此前")[0]
