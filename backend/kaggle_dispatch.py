@@ -57,6 +57,24 @@ def _load_jobs() -> List[Dict[str, Any]]:
         return []
 
 
+# Params that carry a live credential. They have to reach the kernel, but they
+# must never reach the job log: GitHub's secret scanner caught exactly this,
+# blocking a push because a persisted drive_access_token sat in kaggle_jobs.json.
+SECRET_PARAM_KEYS = ("drive_access_token", "access_token", "token", "secret",
+                     "client_secret", "refresh_token", "password", "api_key")
+
+
+def _redact(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy of the params with credential values replaced by a marker."""
+    out = {}
+    for k, v in (params or {}).items():
+        if any(s in k.lower() for s in SECRET_PARAM_KEYS):
+            out[k] = f"<redacted {len(str(v))} chars>"
+        else:
+            out[k] = v
+    return out
+
+
 def _save_jobs(jobs: List[Dict[str, Any]]) -> None:
     os.makedirs(os.path.dirname(JOBS_FILE), exist_ok=True)
     tmp = JOBS_FILE + ".part"
@@ -404,7 +422,8 @@ def dispatch(username: str, slug: str, params: Dict[str, Any], *,
             "ref": url_m.group(1) if url_m else (ref_m.group(1) if ref_m else f"{username}/{slug}"),
             "version": int(ver_m.group(1)) if ver_m else None,
             "slug": slug,
-            "params": params,
+            # Redacted: this record is written to disk and read by the dashboard.
+            "params": _redact(params),
             "pushed_at": time.time(),
             "status": "QUEUED",
             "push_output": text[:400],

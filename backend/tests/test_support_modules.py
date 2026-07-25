@@ -979,3 +979,50 @@ def test_uploadbench_generates_incompressible_data():
     assert "os.urandom" in src
     # It must not spend the measurement on a download it doesn't need.
     assert "aws s3 cp" not in src.split("elif kind == \"uploadbench\"")[1].split("elif")[0]
+
+
+def test_secret_path_stores_a_refresh_token_not_an_access_token():
+    """The whole point of the Secrets path is permanence: an access token dies in
+    an hour, so the stored blob must be the refresh-token triple that
+    token_from_secret() exchanges on every run."""
+    from backend.drive_rest import token_from_secret, DriveError
+    # An access token alone must be rejected, loudly, rather than half-working.
+    with pytest.raises(DriveError, match="client_id"):
+        token_from_secret(json.dumps({"access_token": "FAKE-not-a-real-prefix"}))
+    # And the accepted shape is exactly what export_drive_secret.py emits.
+    import inspect
+    src = inspect.getsource(token_from_secret)
+    assert '"client_id", "client_secret", "refresh_token"' in src
+
+
+def test_job_records_never_persist_a_credential(tmp_path, monkeypatch):
+    """Params carrying a token must reach the kernel but not the job log.
+    GitHub's secret scanner blocked a push over exactly this: a live
+    drive_access_token sitting in backend/data/kaggle_jobs.json."""
+    import backend.kaggle_dispatch as kd
+    monkeypatch.setattr(kd, "JOBS_FILE", str(tmp_path / "jobs.json"))
+    monkeypatch.setattr(kd, "cli_status", lambda: {
+        "installed": True, "authenticated": True, "auth_hint": None})
+    monkeypatch.setattr(kd, "_run", lambda a, timeout=0: {
+        "ok": True, "out": "Kernel version 1 successfully pushed", "err": ""})
+
+    # Deliberately not a real token prefix: fixtures should not trip
+    # secret scanners on their own.
+    secret = "FAKE-TOKEN-" + "z" * 40
+    kd.dispatch("u", "cq-test-slug", {"kind": "uploadbench", "mb": 200,
+                                      "drive_access_token": secret})
+    on_disk = (tmp_path / "jobs.json").read_text()
+    assert secret not in on_disk
+    assert "redacted" in on_disk
+    # Non-secret params must survive, or the log stops being useful.
+    assert '"mb": 200' in on_disk
+
+
+def test_redaction_matches_by_substring_not_exact_key():
+    """New callers will invent new names; anything that reads like a credential
+    has to be caught without updating a list each time."""
+    from backend.kaggle_dispatch import _redact
+    out = _redact({"my_api_key": "x" * 40, "user_password": "hunter2",
+                   "chain": "eth"})
+    assert "x" * 40 not in str(out) and "hunter2" not in str(out)
+    assert out["chain"] == "eth"
