@@ -21,6 +21,7 @@ the other way round. DuckDB only ever reads local disk.
 | Component | Status |
 |---|---|
 | Binance market-data ingestion (`data.binance.vision`) | Working — no API key needed |
+| AWS Public Blockchain ingestion (BTC/ETH) | Working — no API key needed |
 | DuckDB query engine over Parquet | Working |
 | MCP server (HTTP, multi-user, quota + rate limited) | Working |
 | Admin dashboard (7 panels, password login) | Working |
@@ -140,6 +141,8 @@ chain mirroring impractical).
 
 - No strategy mining or backtest engine; the dashboard leaderboard is labelled
   as preview sample data.
+- Colab dispatch still uses the polling worker. Google's official CLI can drive
+  Colab directly, but free-tier eligibility is unverified — see docs/接入参考.md.
 - `vendor/9drive` and `vendor/Drive-Pool` are vendored but not wired in.
 - MCP user store is a JSON file — fine for tens of users, not thousands.
 - Compaction upload path needs `rclone` on PATH; without it files stay local.

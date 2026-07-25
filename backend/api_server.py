@@ -22,6 +22,10 @@ from backend.mcp_logs import read_recent_logs
 from backend.transfer_log import get_today_totals
 from backend.binance_ingestion import ingest_binance_klines
 from backend.gemini_probe import probe_all, TIER_RULES, DOC_URL
+from backend.aws_blockchain_ingestion import (
+    ingest_aws_blockchain, preview as aws_preview, BudgetExceeded,
+    CHAINS as AWS_CHAINS, TABLES as AWS_TABLES,
+)
 from backend.job_queue import (
     submit_job, claim_job, report_result, heartbeat,
     list_workers, list_jobs, get_job, queue_stats, WORKER_TIMEOUT_S,
@@ -229,6 +233,45 @@ class IngestRequest(BaseModel):
     chain: str = "ethereum"
     from_block: int = 18000000
     to_block: int = 18000100
+    # AWS public dataset
+    table: str = "blocks"
+    start_date: str = ""
+    end_date: str = ""
+    max_gb: float = 2.0
+
+
+@app.get("/api/aws/catalog")
+def aws_catalog():
+    """Chains/tables available, with measured daily sizes so a table can be
+    picked knowingly -- eth traces is ~500x eth blocks per day."""
+    return {
+        "chains": AWS_CHAINS,
+        "tables": AWS_TABLES,
+        "measured_daily_mb": {
+            "eth": {"blocks": 5.5, "contracts": 24.5, "token_transfers": 258.0,
+                    "transactions": 784.4, "logs": 921.6, "traces": 2642.2},
+            "btc": {"blocks": 0.1, "transactions": 551.6},
+        },
+        "measured_on": "2026-07-01",
+    }
+
+
+class AwsPreviewRequest(BaseModel):
+    chain: str = "eth"
+    table: str = "blocks"
+    start_date: str
+    end_date: str
+
+
+@app.post("/api/aws/preview")
+def aws_preview_endpoint(req: AwsPreviewRequest):
+    """Byte count for a range before committing to the download."""
+    try:
+        return aws_preview(req.chain, req.table, req.start_date, req.end_date)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"AWS listing failed: {e}")
 
 
 @app.post("/api/ingest")
@@ -241,6 +284,23 @@ def trigger_ingest(req: IngestRequest):
             return result
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Binance ingestion failed: {e}")
+    if req.source == "aws":
+        try:
+            result = ingest_aws_blockchain(
+                req.chain if req.chain in AWS_CHAINS else "eth",
+                req.table,
+                req.start_date or None,
+                req.end_date or None,
+                req.max_gb,
+            )
+            mount_parquet_views(conn)
+            return result
+        except BudgetExceeded as e:
+            raise HTTPException(status_code=413, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"AWS ingestion failed: {e}")
     if req.source == "hypersync":
         try:
             from backend.hypersync_ingestion import extract_chain_data
@@ -249,7 +309,7 @@ def trigger_ingest(req: IngestRequest):
             return {"files": result.files, "chain": result.chain, "is_synthetic": result.is_synthetic}
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Hypersync ingestion failed: {e}")
-    raise HTTPException(status_code=400, detail=f"Unknown source '{req.source}' (expected 'binance' or 'hypersync')")
+    raise HTTPException(status_code=400, detail=f"Unknown source '{req.source}' (expected 'binance', 'aws' or 'hypersync')")
 
 
 @app.get("/api/data-assets")

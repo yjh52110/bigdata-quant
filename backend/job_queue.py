@@ -1,9 +1,13 @@
 """Pull-based job queue for free external compute (Google Colab).
 
-Colab has no inbound networking and no stable address, so jobs cannot be
-pushed to it. Workers instead poll this queue, claim a job, run it, and post
-the result back -- every request is outbound from the worker, which is the
-only shape that works on a free Colab runtime.
+A free Colab runtime has no inbound networking and no stable address, so a
+worker inside a notebook cannot be connected to. It polls instead: claim a
+job, run it, post the result back, every request outbound.
+
+Note there is now also an official CLI (googlecolab/google-colab-cli) that
+drives Colab from outside, which would allow direct dispatch instead. It is
+not used here yet because whether it works on the free tier is unverified;
+this queue is the path that has actually been tested end to end.
 
 SQLite rather than JSON because claiming a job must be atomic: two workers
 polling at the same moment must not both get the same job.

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Database, UploadCloud, Filter, Zap, Archive, Download } from 'lucide-react';
+import { Database, UploadCloud, Filter, Zap, Archive, Download, Boxes } from 'lucide-react';
 
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
@@ -61,6 +61,49 @@ export default function DataAssets() {
     } finally {
       setIngesting(false);
     }
+  };
+
+  const [aws, setAws] = useState<any>({ chains: {}, tables: {}, measured_daily_mb: {} });
+  const [awsChain, setAwsChain] = useState('eth');
+  const [awsTable, setAwsTable] = useState('blocks');
+  const [awsFrom, setAwsFrom] = useState('');
+  const [awsTo, setAwsTo] = useState('');
+  const [awsBudget, setAwsBudget] = useState(2);
+  const [awsMsg, setAwsMsg] = useState<string | null>(null);
+  const [awsBusy, setAwsBusy] = useState(false);
+
+  useEffect(() => {
+    apiFetch('/api/aws/catalog').then(r => r.json()).then(d => {
+      setAws(d);
+      // Default to a two-day window ending three days back; recent days are
+      // not always published yet.
+      const end = new Date(Date.now() - 3 * 86400000);
+      const start = new Date(Date.now() - 4 * 86400000);
+      setAwsTo(end.toISOString().slice(0, 10));
+      setAwsFrom(start.toISOString().slice(0, 10));
+    }).catch(console.error);
+  }, []);
+
+  const awsPerDayMb = aws.measured_daily_mb?.[awsChain]?.[awsTable];
+
+  const awsRun = async (previewOnly: boolean) => {
+    setAwsBusy(true);
+    setAwsMsg(null);
+    try {
+      const path = previewOnly ? '/api/aws/preview' : '/api/ingest';
+      const body = previewOnly
+        ? { chain: awsChain, table: awsTable, start_date: awsFrom, end_date: awsTo }
+        : { source: 'aws', chain: awsChain, table: awsTable, start_date: awsFrom, end_date: awsTo, max_gb: awsBudget };
+      const res = await apiFetch(path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const d = await res.json();
+      if (!res.ok) { setAwsMsg(d.detail || 'Failed'); return; }
+      setAwsMsg(previewOnly
+        ? t('da.awsPreviewResult', { gb: d.total_gb, days: d.days.length })
+        : t('da.awsDone', { w: d.days_written.length, gb: d.total_gb, s: d.days_skipped.length }));
+    } catch (e) { setAwsMsg(String(e)); }
+    finally { setAwsBusy(false); }
   };
 
   const lastCompactionText = syncStatus.compaction_watchdog.last_compaction_at
@@ -125,6 +168,67 @@ export default function DataAssets() {
           </button>
         </div>
         {ingestMsg && <p className="text-sm text-slate-300 mt-3">{ingestMsg}</p>}
+      </div>
+
+      <div className="glass-panel p-5 border-l-4 border-l-indigo-500">
+        <h3 className="text-white font-semibold mb-1 flex items-center gap-2">
+          <Boxes size={18} className="text-indigo-400" />
+          {t('da.awsTitle')}
+        </h3>
+        <p className="text-xs text-slate-500 mb-4">{t('da.awsNote')}</p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-500">{t('da.awsChain')}</span>
+            <select value={awsChain}
+              onChange={e => { setAwsChain(e.target.value); setAwsTable((aws.tables?.[e.target.value] || ['blocks'])[0]); }}
+              className="px-3 min-h-[44px] rounded-lg bg-slate-800 border border-slate-700 text-white outline-none focus:border-indigo-500">
+              {Object.keys(aws.chains || {}).map(c => <option key={c} value={c}>{aws.chains[c]}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-500">{t('da.awsTable')}</span>
+            <select value={awsTable} onChange={e => setAwsTable(e.target.value)}
+              className="px-3 min-h-[44px] rounded-lg bg-slate-800 border border-slate-700 text-white outline-none focus:border-indigo-500">
+              {(aws.tables?.[awsChain] || []).map((tb: string) => <option key={tb} value={tb}>{tb}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-500">{t('da.awsFrom')}</span>
+            <input type="date" value={awsFrom} onChange={e => setAwsFrom(e.target.value)}
+              className="px-3 min-h-[44px] rounded-lg bg-slate-800 border border-slate-700 text-white outline-none focus:border-indigo-500" />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-500">{t('da.awsTo')}</span>
+            <input type="date" value={awsTo} onChange={e => setAwsTo(e.target.value)}
+              className="px-3 min-h-[44px] rounded-lg bg-slate-800 border border-slate-700 text-white outline-none focus:border-indigo-500" />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-500">{t('da.awsBudget')}</span>
+            <select value={awsBudget} onChange={e => setAwsBudget(Number(e.target.value))}
+              className="px-3 min-h-[44px] rounded-lg bg-slate-800 border border-slate-700 text-white outline-none focus:border-indigo-500">
+              {[0.5, 2, 5, 20, 100].map(g => <option key={g} value={g}>{g} GB</option>)}
+            </select>
+          </label>
+        </div>
+
+        {awsPerDayMb != null && (
+          <p className="text-xs text-slate-500 mt-2">
+            {awsChain}/{awsTable} — {t('da.awsPerDay', { mb: awsPerDayMb })}
+          </p>
+        )}
+
+        <div className="flex flex-col sm:flex-row gap-3 mt-3">
+          <button onClick={() => awsRun(true)} disabled={awsBusy}
+            className="px-5 min-h-[44px] sm:min-h-0 sm:py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 disabled:opacity-50 text-white rounded-lg transition-colors">
+            {t('da.awsPreview')}
+          </button>
+          <button onClick={() => awsRun(false)} disabled={awsBusy}
+            className="px-5 min-h-[44px] sm:min-h-0 sm:py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 text-white rounded-lg transition-colors">
+            {awsBusy ? t('da.ingesting') : t('da.awsIngest')}
+          </button>
+        </div>
+        {awsMsg && <p className="text-sm text-slate-300 mt-3 break-words">{awsMsg}</p>}
       </div>
 
       {assetsInfo.synthetic_files > 0 && (
