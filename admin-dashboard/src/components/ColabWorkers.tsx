@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, Send, RefreshCw } from 'lucide-react';
+import { Cpu, Send, RefreshCw, Terminal, BookOpen, Info } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
 import ResponsiveTable from './ResponsiveTable';
@@ -15,6 +15,24 @@ export default function ColabWorkers() {
   const [months, setMonths] = useState(1);
   const [drivePath, setDrivePath] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
+  const [colab, setColab] = useState<any>(null);
+  const [probing, setProbing] = useState<string | null>(null);
+  const [probeResult, setProbeResult] = useState<Record<string, any>>({});
+
+  const loadColab = () => {
+    apiFetch('/api/colab/status').then(r => r.json()).then(setColab).catch(console.error);
+  };
+
+  const probe = async (name: string) => {
+    setProbing(name);
+    try {
+      const res = await apiFetch(`/api/colab/probe/${encodeURIComponent(name)}`, { method: 'POST' });
+      const d = await res.json();
+      setProbeResult(p => ({ ...p, [name]: res.ok ? d.specs : { error: d.detail } }));
+    } catch (e) {
+      setProbeResult(p => ({ ...p, [name]: { error: String(e) } }));
+    } finally { setProbing(null); }
+  };
 
   const load = () => {
     apiFetch('/api/workers').then(r => r.json()).then(d => { setWorkers(d.workers || []); setStats(d.stats || {}); }).catch(console.error);
@@ -23,8 +41,11 @@ export default function ColabWorkers() {
 
   useEffect(() => {
     load();
+    loadColab();
     const i = setInterval(load, 5000);
-    return () => clearInterval(i);
+    // The CLI shells out and takes seconds, so poll it far less often.
+    const c = setInterval(loadColab, 30000);
+    return () => { clearInterval(i); clearInterval(c); };
   }, []);
 
   const submit = async () => {
@@ -70,6 +91,79 @@ export default function ColabWorkers() {
           </div>
         ))}
       </div>
+
+      {colab && (
+        <div className="glass-panel p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+            <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+              <Terminal size={18} className="text-blue-400" />
+              {t('cw.cliTitle')}
+            </h3>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-xs px-2 py-1 rounded ${colab.installed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+                {colab.installed ? `${t('cw.cliInstalled')} v${colab.version}` : t('cw.cliMissing')}
+              </span>
+              <span className={`text-xs px-2 py-1 rounded ${colab.authenticated ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                {colab.authenticated ? t('cw.cliAuthed') : t('cw.cliNotAuthed')}
+              </span>
+              <button onClick={loadColab} className="text-slate-400 hover:text-white p-2" aria-label={t('acc.sync')}>
+                <RefreshCw size={14} />
+              </button>
+            </div>
+          </div>
+          {colab.auth_hint && <p className="text-xs text-amber-300 mb-3">{colab.auth_hint}</p>}
+          {colab.reason && !colab.available && <p className="text-xs text-red-400 mb-3 font-mono break-words">{colab.reason}</p>}
+
+          <h4 className="text-sm font-semibold text-slate-300 mb-2">{t('cw.liveSessions', { n: colab.sessions?.length ?? 0 })}</h4>
+          <ResponsiveTable
+            rows={colab.sessions || []}
+            empty={t('cw.noLiveSessions')}
+            columns={[
+              { key: 'name', header: t('cw.colSession'), cellClass: 'text-slate-200 font-mono text-sm', render: (x: any) => x.name },
+              { key: 'machine', header: t('cw.colMachine'), cellClass: 'text-slate-500 font-mono text-xs break-all', render: (x: any) => x.machine },
+              { key: 'hw', header: t('cw.colHardware'), cellClass: 'text-slate-300 text-sm', render: (x: any) => `${x.hardware} / ${x.variant}` },
+              {
+                key: 'state', header: t('cw.colState'), cellClass: 'text-sm',
+                render: (x: any) => (
+                  <span className="inline-flex flex-col items-end sm:items-start">
+                    <span className={x.status === 'BUSY' ? 'text-amber-400' : 'text-emerald-400'}>{x.status || '—'}</span>
+                    {x.last_execution && <span className="text-xs text-slate-500 break-words">{x.last_execution}</span>}
+                  </span>
+                ),
+              },
+              {
+                key: 'probe', header: t('cw.probeBtn'), alignRight: true,
+                render: (x: any) => {
+                  const r = probeResult[x.name];
+                  return (
+                    <span className="inline-flex flex-col items-end gap-1">
+                      <button onClick={() => probe(x.name)} disabled={probing === x.name}
+                        className="text-xs px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded border bg-blue-500/20 border-blue-500/40 text-blue-300 disabled:opacity-50">
+                        {probing === x.name ? t('cw.probing') : t('cw.probeBtn')}
+                      </button>
+                      {r && !r.error && (
+                        <span className="text-xs font-mono text-slate-400">
+                          {r.cpu_count} vCPU · {r.ram_gb}GB · {r.disk_free_gb}GB free{r.gpu && r.gpu !== 'none' ? ` · ${r.gpu}` : ''}
+                        </span>
+                      )}
+                      {r?.error && <span className="text-xs text-red-400 break-words max-w-[220px]">{r.error}</span>}
+                    </span>
+                  );
+                },
+              },
+            ]}
+          />
+
+          <div className="mt-4 flex flex-wrap gap-2 items-center">
+            <span className="text-xs text-slate-500">{t('cw.hardwareOptions')}:</span>
+            {Object.entries(colab.hardware_options || {}).map(([kind, list]: any) => (
+              <span key={kind} className="text-xs px-2 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono">
+                {kind.toUpperCase()}: {(list as string[]).join(', ')}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="glass-panel p-5 border-l-4 border-l-emerald-500">
         <h3 className="text-white font-semibold mb-1 flex items-center gap-2">
@@ -214,6 +308,38 @@ export default function ColabWorkers() {
           ]}
         />
       </div>
+
+      {colab && (
+        <div className="glass-panel p-5">
+          <h3 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+            <Info size={18} className="text-amber-400" />
+            {t('cw.limitsTitle')}
+          </h3>
+          <p className="text-xs text-amber-300/80 mb-4">{colab.quota_note}</p>
+          <ResponsiveTable
+            rows={colab.documented_limits || []}
+            empty="—"
+            columns={[
+              { key: 'item', header: t('cw.colItem'), cellClass: 'text-slate-200 text-sm', render: (x: any) => x.item },
+              { key: 'value', header: t('cw.colValue'), cellClass: 'text-amber-300 text-sm', render: (x: any) => x.value },
+              { key: 'note', header: t('cw.colNote'), cellClass: 'text-slate-500 text-xs break-words', render: (x: any) => x.note },
+            ]}
+          />
+
+          <h4 className="text-sm font-semibold text-slate-300 mt-5 mb-2 flex items-center gap-2">
+            <BookOpen size={14} className="text-blue-400" />
+            {t('cw.docsTitle')}
+          </h4>
+          <div className="flex flex-col gap-1.5">
+            {(colab.doc_links || []).map((d: any, i: number) => (
+              <a key={i} href={d.url} target="_blank" rel="noopener noreferrer"
+                 className="text-sm text-blue-400 hover:text-blue-300 hover:underline break-all">
+                {d.title}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

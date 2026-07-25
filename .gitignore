@@ -55,3 +55,4 @@ backend/data/compaction_state.json
 backend/data/mcp_users.json
 backend/data/jobs.db*
 backend/data/chain/
+.claude/

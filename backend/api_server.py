@@ -22,6 +22,9 @@ from backend.mcp_logs import read_recent_logs
 from backend.transfer_log import get_today_totals
 from backend.binance_ingestion import ingest_binance_klines
 from backend.gemini_probe import probe_all, list_models, pick_default_model, TIER_RULES, DOC_URL
+from backend.colab_control import (
+    overview as colab_overview, probe_session as colab_probe_session,
+)
 from backend.aws_blockchain_ingestion import (
     ingest_aws_blockchain, preview as aws_preview, BudgetExceeded,
     CHAINS as AWS_CHAINS, TABLES as AWS_TABLES,
@@ -505,6 +508,22 @@ def get_job_detail(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="No such job")
     return job
+
+
+@app.get("/api/colab/status")
+def colab_status():
+    """Live Colab state via the official CLI. Reports what is measurable and
+    states plainly that quota is not, rather than showing a made-up figure."""
+    return colab_overview()
+
+
+@app.post("/api/colab/probe/{session}")
+def colab_probe(session: str):
+    """Measures a live session's real CPU/RAM/disk/GPU by running a probe in it."""
+    r = colab_probe_session(session)
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r.get("error", "probe failed"))
+    return r
 
 
 @app.get("/api/workers")

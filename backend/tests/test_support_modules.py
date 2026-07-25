@@ -151,3 +151,59 @@ def test_model_picker_skips_non_text_variants():
     for n in ["gemini-3.1-flash-image", "gemini-3.1-flash-tts-preview",
               "gemini-2.5-computer-use-preview-10-2025"]:
         assert any(v in n for v in _SPECIAL_VARIANTS), f"{n} should be excluded"
+
+
+# --------------------------------------------------------------------------
+# colab_control
+# --------------------------------------------------------------------------
+def test_session_line_parses_real_cli_output():
+    """Parsed against the CLI's actual `colab sessions` output format."""
+    from backend.colab_control import _SESSION_RE
+    line = "  [live] m-s-kkb-usc1b1-guv5u5jvs6wk | Hardware: CPU | Variant: DEFAULT"
+    m = _SESSION_RE.search(line)
+    assert m and m.group(1) == "live"
+    assert m.group(2) == "m-s-kkb-usc1b1-guv5u5jvs6wk"
+    assert (m.group(3), m.group(4)) == ("CPU", "DEFAULT")
+
+
+def test_cert_bundle_is_pinned_for_the_cli():
+    """python.org builds have no populated cert store, so the CLI's stdlib-ssl
+    WebSocket layer dies with CERTIFICATE_VERIFY_FAILED unless we point it at
+    certifi. Regression guard: the env must always carry a CA bundle."""
+    from backend.colab_control import _env
+    env = _env()
+    assert env.get("SSL_CERT_FILE", "").endswith("cacert.pem")
+
+
+def test_quota_is_reported_as_unavailable_never_invented(monkeypatch):
+    """Google publishes no quota figure and no endpoint. The payload must say
+    so explicitly so the UI can't render a made-up number."""
+    import backend.colab_control as c
+    monkeypatch.setattr(c, "list_sessions", lambda: {"available": False, "sessions": []})
+    o = c.overview()
+    assert o["quota_available"] is False
+    assert o["quota_note"]
+    # bool is a subclass of int, so quota_available itself must not count.
+    assert not any("quota" in k and isinstance(v, (int, float)) and not isinstance(v, bool)
+                   for k, v in o.items()), "no numeric quota may be present"
+
+
+def test_documented_limits_include_the_multi_account_prohibition():
+    """The user has ~100 accounts; the UI must surface that using them to
+    widen Colab compute is against Google's terms."""
+    from backend.colab_control import DOCUMENTED_LIMITS
+    joined = " ".join(x["item"] + x["note"] for x in DOCUMENTED_LIMITS)
+    assert "多账号" in joined and "multiple accounts" in joined
+
+
+def test_uncreatable_hardware_variant_is_not_offered():
+    from backend.colab_control import HARDWARE
+    assert HARDWARE["gpu"] and "V100" not in HARDWARE["gpu"]
+    assert set(HARDWARE) == {"cpu", "gpu", "tpu"}
+
+
+def test_missing_cli_degrades_instead_of_raising(monkeypatch):
+    import backend.colab_control as c
+    monkeypatch.setattr(c.shutil, "which", lambda _: None)
+    s = c.list_sessions()
+    assert s["available"] is False and s["sessions"] == []
