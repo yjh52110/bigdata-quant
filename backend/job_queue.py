@@ -57,6 +57,7 @@ def init_db() -> None:
                 worker_id TEXT PRIMARY KEY,
                 label TEXT,
                 runtime TEXT,
+                specs TEXT,
                 last_seen REAL NOT NULL,
                 jobs_done INTEGER NOT NULL DEFAULT 0
             )
@@ -125,14 +126,17 @@ def report_result(job_id: str, worker_id: str, ok: bool, result: Any = None, err
         return cur.rowcount > 0
 
 
-def heartbeat(worker_id: str, label: str = "", runtime: str = "") -> None:
+def heartbeat(worker_id: str, label: str = "", runtime: str = "", specs: Optional[dict] = None) -> None:
     now = time.time()
+    specs_json = json.dumps(specs) if specs else None
     with _conn() as con:
         con.execute(
-            "INSERT INTO workers (worker_id, label, runtime, last_seen) VALUES (?,?,?,?) "
+            "INSERT INTO workers (worker_id, label, runtime, specs, last_seen) VALUES (?,?,?,?,?) "
             "ON CONFLICT(worker_id) DO UPDATE SET last_seen=excluded.last_seen, "
-            "label=excluded.label, runtime=excluded.runtime",
-            (worker_id, label, runtime, now),
+            "label=excluded.label, runtime=excluded.runtime, "
+            # A bare claim() heartbeat carries no specs; keep the last known set.
+            "specs=COALESCE(excluded.specs, workers.specs)",
+            (worker_id, label, runtime, specs_json, now),
         )
 
 
@@ -146,6 +150,7 @@ def list_workers() -> List[Dict[str, Any]]:
             "label": r["label"] or r["worker_id"][:8],
             "runtime": r["runtime"] or "",
             "jobs_done": r["jobs_done"],
+            "specs": json.loads(r["specs"]) if r["specs"] else {},
             "seconds_since_seen": round(now - r["last_seen"]),
             "online": (now - r["last_seen"]) < WORKER_TIMEOUT_S,
         }

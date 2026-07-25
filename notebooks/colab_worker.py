@@ -53,6 +53,39 @@ def _headers():
     return {"X-API-Key": API_KEY} if API_KEY else {}
 
 
+SESSION_START = time.time()
+# Colab's documented free-tier ceiling. Google publishes no quota figure and
+# offers no endpoint to query one -- "usage limits sometimes fluctuate" -- so
+# elapsed session time against this cap is the only concrete number available.
+COLAB_MAX_SESSION_S = 12 * 3600
+
+
+def runtime_specs():
+    import shutil
+
+    specs = {"elapsed_s": round(time.time() - SESSION_START), "max_session_s": COLAB_MAX_SESSION_S}
+    try:
+        specs["cpu_count"] = os.cpu_count()
+        specs["ram_gb"] = round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1024 ** 3, 1)
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        total, _, free = shutil.disk_usage("/content" if os.path.exists("/content") else "/")
+        specs["disk_free_gb"] = round(free / 1024 ** 3, 1)
+        specs["disk_total_gb"] = round(total / 1024 ** 3, 1)
+    except OSError:
+        pass
+    try:
+        import subprocess
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                             capture_output=True, timeout=5)
+        gpu = out.stdout.decode().strip()
+        specs["gpu"] = gpu.splitlines()[0] if gpu else "none"
+    except Exception:
+        specs["gpu"] = "none"
+    return specs
+
+
 def run_sql(payload):
     import duckdb
 
@@ -182,7 +215,8 @@ def main():
                 idle += 1
                 # Heartbeat anyway so the dashboard keeps showing us online.
                 requests.post(f"{API_BASE}/api/workers/heartbeat",
-                              json={"worker_id": worker_id, "label": WORKER_LABEL, "runtime": runtime},
+                              json={"worker_id": worker_id, "label": WORKER_LABEL,
+                                    "runtime": runtime, "specs": runtime_specs()},
                               headers=_headers(), timeout=30)
                 if idle % 12 == 1:
                     print(f"[{time.strftime('%H:%M:%S')}] idle, waiting for jobs...")

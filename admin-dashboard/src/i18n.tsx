@@ -218,6 +218,22 @@ const dict = {
   'cw.job.running': { zh: '运行中', en: 'running' },
   'cw.job.done': { zh: '已完成', en: 'done' },
   'cw.job.failed': { zh: '失败', en: 'failed' },
+  'cw.specs': { zh: '运行时', en: 'Runtime specs' },
+  'cw.session': { zh: '本次会话', en: 'Session' },
+  'cw.sessionNote': { zh: 'Colab 免费版单次会话上限 12 小时；官方明说用量限制会浮动且不提供查询接口，因此这里只显示实测到的已运行时长。', en: 'Colab free sessions are capped at 12h. Google states limits fluctuate and offers no endpoint to query them, so only the measured elapsed time is shown.' },
+
+  'gm.probe': { zh: '实测密钥', en: 'Probe keys' },
+  'gm.probing': { zh: '检测中…', en: 'Probing...' },
+  'gm.probeNote': { zh: 'Google 未提供查询剩余额度的接口，档位也不由订阅决定。此处对每个密钥发起一次真实调用，原样回显 Google 的响应。', en: 'Google exposes no quota-remaining endpoint, and tier is not set by a subscription. This makes one real call per key and shows Google\'s response verbatim.' },
+  'gm.probeResult': { zh: '实测结果', en: 'Probe result' },
+  'gm.working': { zh: '可用', en: 'Working' },
+  'gm.rateLimited': { zh: '已限流', en: 'Rate limited' },
+  'gm.invalidKey': { zh: '密钥无效', en: 'Invalid key' },
+  'gm.probeError': { zh: '调用出错', en: 'Error' },
+  'gm.tierTitle': { zh: '官方档位规则（参考，非你的额度）', en: 'Official tier rules (reference, not your quota)' },
+  'gm.colTier': { zh: '档位', en: 'Tier' },
+  'gm.colQualification': { zh: '达成条件', en: 'Qualification' },
+  'gm.subscriptionNote': { zh: '注意：消费级 Gemini / Google One 订阅不会给项目开通 API 额度——只有关联有效结算账户才能脱离免费档。', en: 'Note: a consumer Gemini / Google One subscription does not grant API quota. Only linking an active billing account moves a project off the Free tier.' },
 } as const;
 
 export type Key = keyof typeof dict;

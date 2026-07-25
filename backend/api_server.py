@@ -21,6 +21,7 @@ from backend.alerting import list_alert_rules, send_test_alert, telegram_configu
 from backend.mcp_logs import read_recent_logs
 from backend.transfer_log import get_today_totals
 from backend.binance_ingestion import ingest_binance_klines
+from backend.gemini_probe import probe_all, TIER_RULES, DOC_URL
 from backend.job_queue import (
     submit_job, claim_job, report_result, heartbeat,
     list_workers, list_jobs, get_job, queue_stats, WORKER_TIMEOUT_S,
@@ -333,6 +334,18 @@ def get_gemini_status():
     return gemini_pool.get_status()
 
 
+@app.post("/api/gemini/probe")
+def probe_gemini(model: str = "gemini-2.5-flash"):
+    """Makes one real call per configured key. Google exposes no quota-remaining
+    endpoint, so an actual request is the only way to learn a key's real state."""
+    return probe_all(gemini_pool.api_keys, model)
+
+
+@app.get("/api/gemini/reference")
+def gemini_reference():
+    return {"tier_rules": TIER_RULES, "doc_url": DOC_URL}
+
+
 @app.get("/api/mcp/logs")
 def get_mcp_logs(limit: int = 100):
     return {"logs": read_recent_logs(limit)}
@@ -437,11 +450,12 @@ class HeartbeatRequest(BaseModel):
     worker_id: str
     label: str = ""
     runtime: str = ""
+    specs: dict = {}
 
 
 @app.post("/api/workers/heartbeat")
 def worker_heartbeat(req: HeartbeatRequest):
-    heartbeat(req.worker_id, req.label, req.runtime)
+    heartbeat(req.worker_id, req.label, req.runtime, req.specs)
     return {"ok": True, "timeout_s": WORKER_TIMEOUT_S}
 
 

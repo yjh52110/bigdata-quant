@@ -152,9 +152,36 @@ export default function ColabWorkers() {
                 </span>
               ),
             },
+            {
+              key: 'specs', header: t('cw.specs'), cellClass: 'text-slate-400 font-mono text-xs',
+              render: (w: any) => {
+                const s = w.specs || {};
+                const bits = [];
+                if (s.cpu_count) bits.push(`${s.cpu_count} vCPU`);
+                if (s.ram_gb) bits.push(`${s.ram_gb}GB RAM`);
+                if (s.disk_free_gb != null) bits.push(`${s.disk_free_gb}GB free`);
+                if (s.gpu && s.gpu !== 'none') bits.push(s.gpu);
+                return bits.length ? bits.join(' · ') : '—';
+              },
+            },
+            {
+              key: 'session', header: t('cw.session'), cellClass: 'font-mono text-xs',
+              render: (w: any) => {
+                const s = w.specs || {};
+                if (s.elapsed_s == null) return '—';
+                const h = Math.floor(s.elapsed_s / 3600), m = Math.floor((s.elapsed_s % 3600) / 60);
+                const pct = s.max_session_s ? (s.elapsed_s / s.max_session_s) * 100 : 0;
+                return (
+                  <span className={pct > 80 ? 'text-amber-400' : 'text-slate-400'}>
+                    {h}h{String(m).padStart(2, '0')}m / 12h
+                  </span>
+                );
+              },
+            },
             { key: 'jobs', header: t('cw.colJobsDone'), cellClass: 'text-slate-300 font-mono text-sm', render: (w: any) => w.jobs_done },
           ]}
         />
+        <p className="text-xs text-slate-500 mt-3">{t('cw.sessionNote')}</p>
       </div>
 
       <div className="flex-1 glass-panel p-5">

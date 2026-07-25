@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { KeyRound } from 'lucide-react';
+import { KeyRound, Activity } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
 import ResponsiveTable from './ResponsiveTable';
@@ -15,7 +15,23 @@ export default function GeminiPool() {
     keys: [] as any[],
   });
 
+  const [probe, setProbe] = useState<any>(null);
+  const [probing, setProbing] = useState(false);
+
+  const runProbe = async () => {
+    setProbing(true);
+    try {
+      const res = await apiFetch('/api/gemini/probe', { method: 'POST' });
+      setProbe(await res.json());
+    } catch (e) {
+      setProbe({ configured: true, results: [], error: String(e) });
+    } finally {
+      setProbing(false);
+    }
+  };
+
   useEffect(() => {
+    apiFetch('/api/gemini/reference').then(r => r.json()).then(d => setProbe((p: any) => p || { reference: d })).catch(() => {});
     const load = () => {
       apiFetch('/api/gemini/status')
         .then(r => r.json())
@@ -53,6 +69,58 @@ export default function GeminiPool() {
           <p className="text-sm text-slate-400 mb-1">{t('gm.cooldown')}</p>
           <div className="text-3xl font-bold text-amber-400">{status.exhausted_keys}</div>
         </div>
+      </div>
+
+      <div className="glass-panel p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-2">
+          <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+            <Activity size={18} className="text-emerald-400" />
+            {t('gm.probeResult')}
+          </h3>
+          <button
+            onClick={runProbe}
+            disabled={probing || !status.configured}
+            className="px-4 min-h-[44px] sm:min-h-0 sm:py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm rounded-lg transition-colors"
+          >
+            {probing ? t('gm.probing') : t('gm.probe')}
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 mb-4">{t('gm.probeNote')}</p>
+
+        {probe?.results?.length > 0 && (
+          <div className="space-y-2 mb-4">
+            {probe.results.map((r: any, i: number) => (
+              <div key={i} className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3">
+                <div className="flex flex-wrap items-center gap-2 mb-1">
+                  <code className="text-xs font-mono text-slate-300">{r.alias}</code>
+                  <span className={`text-xs px-2 py-0.5 rounded ${
+                    r.status === 'working' ? 'bg-emerald-500/20 text-emerald-400' :
+                    r.status === 'rate_limited' ? 'bg-amber-500/20 text-amber-400' :
+                    'bg-red-500/20 text-red-400'
+                  }`}>
+                    {r.status === 'working' ? t('gm.working') : r.status === 'rate_limited' ? t('gm.rateLimited') :
+                     r.status === 'invalid_key' ? t('gm.invalidKey') : t('gm.probeError')}
+                  </span>
+                  <span className="text-xs text-slate-500 font-mono">{r.latency_ms}ms</span>
+                  {r.tokens?.total != null && <span className="text-xs text-slate-500 font-mono">{r.tokens.total} tokens</span>}
+                </div>
+                {r.detail && <p className="text-xs text-slate-400 font-mono break-words whitespace-pre-wrap">{r.detail}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+        {probe?.tier_hint && <p className="text-xs text-slate-400 mb-4">{probe.tier_hint}</p>}
+
+        <h4 className="text-sm font-semibold text-slate-300 mb-1">{t('gm.tierTitle')}</h4>
+        <p className="text-xs text-amber-300/80 mb-3">{t('gm.subscriptionNote')}</p>
+        <ResponsiveTable
+          rows={(probe?.tier_rules || probe?.reference?.tier_rules || [])}
+          empty="—"
+          columns={[
+            { key: 'tier', header: t('gm.colTier'), cellClass: 'text-slate-200 font-medium', render: (r: any) => r.tier },
+            { key: 'qual', header: t('gm.colQualification'), cellClass: 'text-slate-400 text-sm', render: (r: any) => r.qualification },
+          ]}
+        />
       </div>
 
       <div className="flex-1 glass-panel p-5 flex flex-col">
