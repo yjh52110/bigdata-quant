@@ -297,3 +297,67 @@ def test_no_orphans_means_no_warning(monkeypatch):
     monkeypatch.setattr(c, "_local_session_names", lambda: {"mine"})
     monkeypatch.setattr(c, "session_status", lambda n: {"status": "IDLE", "last_execution": None})
     assert c.list_sessions()["orphan_hint"] is None
+
+
+# --------------------------------------------------------------------------
+# google_account_manager scope choice
+# --------------------------------------------------------------------------
+def test_drive_scope_stays_non_restricted():
+    """`drive` is a restricted scope: shipping it means passing Google's CASA
+    assessment before the consent screen can leave Testing mode, where refresh
+    tokens die after 7 days and only ~100 hand-listed users can connect. This
+    pipeline only ever reads files it wrote, so drive.file suffices."""
+    from backend.google_account_manager import SCOPES
+    assert SCOPES == ["https://www.googleapis.com/auth/drive.file"]
+    assert "auth/drive" not in [s.rsplit("/", 1)[0] + "/drive" for s in SCOPES if s.endswith("/drive")]
+
+
+# --------------------------------------------------------------------------
+# kaggle_control
+# --------------------------------------------------------------------------
+def test_kaggle_quota_seconds_convert_to_hours(monkeypatch):
+    """The CLI reports seconds; the panel shows hours. Conversion happens once
+    here so the component can't disagree with the tests."""
+    from backend.kaggle_control import _normalise
+    q = _normalise({"timeUsed": 3600 * 9, "totalTimeAllowed": 3600 * 30, "timeReserved": 0})
+    assert q["used_h"] == 9.0 and q["total_h"] == 30.0
+    assert q["remaining_h"] == 21.0 and q["pct_used"] == 30.0
+
+
+def test_missing_quota_field_stays_none_not_zero():
+    """A missing total must not render as 0 h, which would read as "quota
+    exhausted" when the real state is "unknown"."""
+    from backend.kaggle_control import _normalise
+    q = _normalise({"timeUsed": 100})
+    assert q["total_s"] is None and "remaining_h" not in q
+
+
+def test_kaggle_snake_and_camel_field_names_both_parse():
+    """The CLI's JSON output and the SDK types differ in casing, so both spellings
+    have to resolve or the panel silently shows nothing."""
+    from backend.kaggle_control import _normalise
+    a = _normalise({"timeUsed": 3600, "totalTimeAllowed": 7200})
+    b = _normalise({"time_used": 3600, "total_time_allowed": 7200})
+    assert a["remaining_h"] == b["remaining_h"] == 1.0
+
+
+def test_kaggle_reports_unauthenticated_instead_of_a_placeholder_quota(monkeypatch):
+    import backend.kaggle_control as k
+    monkeypatch.setattr(k.shutil, "which", lambda _: "/usr/bin/kaggle")
+    monkeypatch.setattr(k.os.path, "exists", lambda p: False)
+    monkeypatch.delenv("KAGGLE_KEY", raising=False)
+    r = k.quota()
+    assert r["available"] is False
+    assert r["authenticated"] is False
+    assert "gpu" not in r
+    assert "kaggle.json" in r["auth_hint"]
+
+
+def test_kaggle_capabilities_state_the_colab_contrast():
+    """The reason to add Kaggle at all is that its quota is readable and its
+    kernels are externally dispatchable -- both absent in Colab. Keep that
+    stated so the panel explains the architectural choice."""
+    from backend.kaggle_control import CAPABILITIES
+    blob = " ".join(c["item"] + c["value"] + c["note"] for c in CAPABILITIES)
+    assert "kaggle quota" in blob and "kernels push" in blob
+    assert "worker" in blob

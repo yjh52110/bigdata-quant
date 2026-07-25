@@ -19,7 +19,26 @@ ACCOUNTS_FILE = os.path.join(DATA_DIR, "google_accounts.json")
 CREDENTIALS_FILE = os.path.join(DATA_DIR, "credentials.json")
 ENCRYPTION_KEY_FILE = os.path.join(DATA_DIR, "encryption.key")
 
-SCOPES = ["https://www.googleapis.com/auth/drive"]
+# drive.file, not drive, deliberately.
+#
+# `drive` is a RESTRICTED scope: publishing the OAuth consent screen to
+# production with it requires passing Google's CASA security assessment
+# (recurring, paid, weeks of turnaround). Until that passes the app is stuck in
+# Testing mode, where refresh tokens expire after 7 days and only ~100
+# hand-listed test users can connect -- unusable for connecting a pool of
+# accounts, let alone external users.
+#
+# drive.file is non-restricted and needs no audit, at the cost of per-file
+# access: the app only sees files it created itself. That is exactly this
+# pipeline's shape (it writes every parquet file it later reads), and the only
+# Drive calls here are about().get() for user + storageQuota, both of which
+# drive.file permits.
+#
+# Consequence to keep in mind: files uploaded by a *different* OAuth client
+# (e.g. rclone with its own client ID) are invisible to this app. Nothing here
+# enumerates files today, so nothing breaks -- but adding a files().list() over
+# rclone-written data would need that data written through this client instead.
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 class GoogleAccountManager:
     def __init__(self):

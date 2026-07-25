@@ -22,6 +22,7 @@ from backend.mcp_logs import read_recent_logs
 from backend.transfer_log import get_today_totals
 from backend.binance_ingestion import ingest_binance_klines
 from backend.gemini_probe import probe_all, list_models, pick_default_model, TIER_RULES, DOC_URL
+from backend.kaggle_control import overview as kaggle_overview
 from backend.colab_control import (
     overview as colab_overview, probe_session as colab_probe_session,
     probe_entitlements as colab_probe_entitlements,
@@ -537,6 +538,14 @@ def colab_entitlements():
     /api/colab/status; this endpoint is the explicit re-measure.
     """
     return colab_probe_entitlements()
+
+
+@app.get("/api/kaggle/status")
+def kaggle_status():
+    """Kaggle free-compute status. Unlike Colab, the weekly GPU/TPU quota is
+    genuinely readable here (`kaggle quota`), so real numbers are returned --
+    or an explicit not-authenticated state, never a placeholder figure."""
+    return kaggle_overview()
 
 
 @app.get("/api/workers")

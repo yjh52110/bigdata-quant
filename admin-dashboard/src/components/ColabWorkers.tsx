@@ -16,11 +16,13 @@ export default function ColabWorkers() {
   const [drivePath, setDrivePath] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [colab, setColab] = useState<any>(null);
+  const [kaggle, setKaggle] = useState<any>(null);
   const [probing, setProbing] = useState<string | null>(null);
   const [probeResult, setProbeResult] = useState<Record<string, any>>({});
 
   const loadColab = () => {
     apiFetch('/api/colab/status').then(r => r.json()).then(setColab).catch(console.error);
+    apiFetch('/api/kaggle/status').then(r => r.json()).then(setKaggle).catch(console.error);
   };
 
   const [measuring, setMeasuring] = useState(false);
@@ -378,6 +380,80 @@ export default function ColabWorkers() {
               { key: 'extra', header: t('cw.colExtra'), cellClass: 'text-slate-500 text-xs break-words', render: (x: any) => x.extra },
             ]}
           />
+        </div>
+      )}
+
+      {kaggle && (
+        <div className="glass-panel p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-1">
+            <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+              <Terminal size={18} className="text-cyan-400" />
+              {t('kg.title')}
+            </h3>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-xs px-2 py-1 rounded ${kaggle.installed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+                {kaggle.installed ? `${t('cw.cliInstalled')} v${kaggle.version}` : t('cw.cliMissing')}
+              </span>
+              <span className={`text-xs px-2 py-1 rounded ${kaggle.authenticated ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                {kaggle.authenticated ? t('cw.cliAuthed') : t('cw.cliNotAuthed')}
+              </span>
+            </div>
+          </div>
+          <p className="text-xs text-slate-500 mb-3">{t('kg.contrast')}</p>
+          {kaggle.auth_hint && (
+            <p className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded p-3 mb-3">
+              {kaggle.auth_hint}
+            </p>
+          )}
+
+          {kaggle.available ? (
+            <>
+              <ResponsiveTable
+                rows={[{ k: 'GPU', q: kaggle.gpu }, { k: 'TPU', q: kaggle.tpu }].filter(x => x.q && x.q.total_h != null)}
+                empty={t('kg.noQuota')}
+                columns={[
+                  { key: 'acc', header: t('kg.colAcc'), cellClass: 'text-slate-200 font-mono text-sm', render: (x: any) => x.k },
+                  { key: 'used', header: t('kg.colUsed'), cellClass: 'text-slate-300 text-sm', render: (x: any) => `${x.q.used_h} h` },
+                  { key: 'total', header: t('kg.colTotal'), cellClass: 'text-slate-300 text-sm', render: (x: any) => `${x.q.total_h} h` },
+                  {
+                    key: 'left', header: t('kg.colRemaining'), cellClass: 'text-sm',
+                    render: (x: any) => (
+                      <span className={x.q.pct_used != null && x.q.pct_used > 80 ? 'text-amber-400' : 'text-emerald-400'}>
+                        {x.q.remaining_h} h{x.q.pct_used != null ? ` (${t('kg.pctUsed', { p: x.q.pct_used })})` : ''}
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+              {kaggle.refresh_time && (
+                <p className="text-xs text-slate-500 mt-2">{t('kg.refresh')}: {String(kaggle.refresh_time)}</p>
+              )}
+            </>
+          ) : (
+            kaggle.reason && !kaggle.auth_hint && (
+              <p className="text-xs text-red-400 font-mono break-words mb-3">{kaggle.reason}</p>
+            )
+          )}
+
+          <h4 className="text-sm font-semibold text-slate-300 mt-5 mb-2">{t('kg.capTitle')}</h4>
+          <ResponsiveTable
+            rows={kaggle.capabilities || []}
+            empty="—"
+            columns={[
+              { key: 'item', header: t('cw.colItem'), cellClass: 'text-slate-200 text-sm', render: (x: any) => x.item },
+              { key: 'value', header: t('cw.colValue'), cellClass: 'text-cyan-300 text-sm', render: (x: any) => x.value },
+              { key: 'note', header: t('cw.colNote'), cellClass: 'text-slate-500 text-xs break-words', render: (x: any) => x.note },
+            ]}
+          />
+
+          <div className="flex flex-col gap-1.5 mt-4">
+            {(kaggle.doc_links || []).map((d: any, i: number) => (
+              <a key={i} href={d.url} target="_blank" rel="noopener noreferrer"
+                 className="text-sm text-cyan-400 hover:text-cyan-300 hover:underline break-all">
+                {d.title}
+              </a>
+            ))}
+          </div>
         </div>
       )}
 
