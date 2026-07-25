@@ -548,3 +548,122 @@ def test_drivecheck_needs_no_parameters():
     from backend.kaggle_dispatch import render_script
     src = render_script({"kind": "drivecheck"})
     assert '"kind": "drivecheck"' in src
+
+
+# --------------------------------------------------------------------------
+# drive_rest
+# --------------------------------------------------------------------------
+def test_drive_client_is_stdlib_only():
+    """It must run in Colab and Kaggle with nothing to pip install, and be
+    shippable verbatim inside a Kaggle push folder."""
+    import ast, pathlib
+    src = pathlib.Path("backend/drive_rest.py").read_text()
+    tree = ast.parse(src)
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= {a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert imported <= {"json", "mimetypes", "os", "time", "urllib", "typing"}, imported
+
+
+def test_resumable_chunk_size_is_a_multiple_of_256kib():
+    """Drive rejects resumable chunks that aren't a multiple of 256 KiB."""
+    from backend.drive_rest import CHUNK
+    assert CHUNK % (256 * 1024) == 0 and CHUNK > 0
+
+
+def test_folder_query_escapes_quotes(monkeypatch):
+    """An apostrophe in a folder name would otherwise break the query and could
+    change which files the search matches. Patched via the fixture so the stub
+    can't leak into later tests."""
+    import backend.drive_rest as dr
+    captured = {}
+
+    def stub(url, **kw):
+        captured["url"] = url
+        return {"files": []}
+
+    monkeypatch.setattr(dr, "_json_request", stub)
+    dr.find_folder("tok", "it's a folder")
+    assert "%5C%27" in captured["url"] or "\\'" in captured["url"]
+
+
+def test_secret_must_carry_all_three_oauth_fields():
+    from backend.drive_rest import token_from_secret, DriveError
+    with pytest.raises(DriveError, match="not valid JSON"):
+        token_from_secret("not json")
+    with pytest.raises(DriveError, match="refresh_token"):
+        token_from_secret('{"client_id": "a", "client_secret": "b"}')
+
+
+def test_worker_no_longer_uses_fuse_mount():
+    """drive.mount() fails headless, so the worker must not depend on it. The
+    only permitted mentions are in the docstring explaining why."""
+    import pathlib, re
+    src = pathlib.Path("notebooks/colab_worker.py").read_text()
+    code = re.sub(r'"""[\s\S]*?"""', "", src, count=1)   # strip module docstring
+    assert "drive.mount(" not in code
+    assert "drive_rest" in code and "push_to_drive" in code
+
+
+def test_kaggle_push_ships_the_shared_drive_client(monkeypatch, tmp_path):
+    """The kernel can only import files present in the push folder, so
+    drive_rest.py has to travel with it -- not be re-implemented inline."""
+    import backend.kaggle_dispatch as kd
+    seen = {}
+    monkeypatch.setattr(kd, "JOBS_FILE", str(tmp_path / "jobs.json"))
+    monkeypatch.setattr(kd, "cli_status", lambda: {
+        "installed": True, "authenticated": True, "auth_hint": None})
+
+    def fake_run(args, timeout=0):
+        folder = args[args.index("-p") + 1]
+        seen["files"] = sorted(os.listdir(folder))
+        return {"ok": True, "out": "Kernel version 1 successfully pushed", "err": ""}
+
+    import os
+    monkeypatch.setattr(kd, "_run", fake_run)
+    kd.dispatch("u", "cq-test-slug", {"kind": "aws", "chain": "eth",
+                                      "table": "blocks", "days": ["2024-01-15"]})
+    assert seen["files"] == ["drive_rest.py", "job.py", "kernel-metadata.json"]
+
+
+def test_dispatched_script_never_inlines_the_credential():
+    """The script is stored in the kernel, so a secret pasted into it would leak
+    with the kernel. It must only ever be read from Kaggle Secrets."""
+    from backend.kaggle_dispatch import render_script
+    src = render_script({"kind": "aws", "chain": "eth", "table": "blocks",
+                         "days": ["2024-01-15"], "drive_folder": "chainquant"})
+    compile(src, "job.py", "exec")
+    assert "UserSecretsClient" in src
+    assert "client_secret" not in src and "refresh_token" not in src
+
+
+def test_unreachable_host_raises_named_error_not_a_bare_urlerror(monkeypatch):
+    """A DNS failure or empty CA store must not escape as a raw URLError -- the
+    worker catches DriveError, so anything else crashes the job loop."""
+    import urllib.error
+    import backend.drive_rest as dr
+    monkeypatch.setattr(dr.urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            urllib.error.URLError("[SSL: CERTIFICATE_VERIFY_FAILED] nope")))
+    with pytest.raises(dr.DriveError) as ei:
+        dr.about("tok")
+    assert "could not reach www.googleapis.com" in str(ei.value)
+    # The certificate case is singled out because it otherwise reads as an outage.
+    assert "SSL_CERT_FILE" in str(ei.value)
+
+
+def test_http_status_is_returned_not_raised(monkeypatch):
+    """401/403 are real answers from Google and must stay distinguishable from
+    never having reached it."""
+    import io, urllib.error
+    import backend.drive_rest as dr
+
+    def boom(*a, **k):
+        raise urllib.error.HTTPError("u", 401, "Unauthorized", {}, io.BytesIO(b'{"error":1}'))
+
+    monkeypatch.setattr(dr.urllib.request, "urlopen", boom)
+    status, _, body = dr._request("https://www.googleapis.com/x")
+    assert status == 401 and b"error" in body

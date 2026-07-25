@@ -225,6 +225,38 @@ elif kind == "drivecheck":
 else:
     result["error"] = f"unknown kind: {kind}"
 
+# Upload to Drive if a folder was requested and the secret is present. The
+# secret is read from Kaggle Secrets, never embedded in this script -- the
+# script is stored in the kernel and would leak with it.
+if PARAMS.get("drive_folder"):
+    try:
+        from kaggle_secrets import UserSecretsClient
+        raw = UserSecretsClient().get_secret(PARAMS.get("secret_name", "DRIVE_OAUTH_JSON"))
+    except Exception as e:
+        result["drive"] = {"error": f"could not read secret: {str(e)[:200]}"}
+        raw = None
+    if raw:
+        try:
+            import drive_rest
+            tok = drive_rest.token_from_secret(raw)
+            targets = [d for d in os.listdir(OUT)
+                       if os.path.isdir(os.path.join(OUT, d))]
+            ups = []
+            for d in targets:
+                ups.append(drive_rest.upload_tree(
+                    tok, os.path.join(OUT, d), f"{PARAMS['drive_folder']}/{d}"))
+            result["drive"] = {
+                "uploads": ups,
+                "total_bytes": sum(u["bytes"] for u in ups),
+                "total_files": sum(u["files"] for u in ups),
+                "mb_per_s": round(sum(u["bytes"] for u in ups) / 1024**2
+                                  / max(1e-6, sum(u["seconds"] for u in ups)), 2),
+            }
+            q = drive_rest.about(tok).get("storageQuota", {})
+            result["drive"]["quota"] = {k: q.get(k) for k in ("limit", "usage")}
+        except Exception as e:
+            result["drive"] = {"error": str(e)[:300]}
+
 result["elapsed_s"] = round(time.time() - started, 1)
 result["specs"] = {"cpu": os.cpu_count()}
 try:
@@ -263,6 +295,11 @@ def dispatch(username: str, slug: str, params: Dict[str, Any], *,
         code_file = "job.py"
         with open(os.path.join(folder, code_file), "w") as f:
             f.write(render_script(params))
+        # `kernels push` uploads the whole folder, so the Drive client rides
+        # along as a real module rather than being string-inlined. One source of
+        # truth shared with the Colab worker.
+        shutil.copy(os.path.join(os.path.dirname(__file__), "drive_rest.py"),
+                    os.path.join(folder, "drive_rest.py"))
         meta = build_metadata(username, slug, title or slug, code_file,
                               enable_gpu=enable_gpu, enable_tpu=enable_tpu)
         with open(os.path.join(folder, "kernel-metadata.json"), "w") as f:

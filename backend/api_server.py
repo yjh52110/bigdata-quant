@@ -10,7 +10,7 @@ import duckdb
 import psutil
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from backend.google_account_manager import GoogleAccountManager
@@ -612,6 +612,20 @@ def kaggle_output(owner: str, slug: str):
 @app.get("/api/kaggle/logs/{owner}/{slug}")
 def kaggle_job_logs(owner: str, slug: str):
     return kaggle_logs(f"{owner}/{slug}")
+
+
+@app.get("/api/worker/drive_rest", response_class=PlainTextResponse)
+def worker_drive_rest():
+    """Serves backend/drive_rest.py to a Colab worker at startup.
+
+    The worker can't import from this repo, and pasting a copy into the
+    notebook would fork the implementation. Serving it keeps one source of
+    truth shared with the Kaggle dispatcher, which ships the same file inside
+    its push folder. Auth-protected like every other /api route.
+    """
+    path = os.path.join(os.path.dirname(__file__), "drive_rest.py")
+    with open(path) as f:
+        return f.read()
 
 
 @app.get("/api/workers")

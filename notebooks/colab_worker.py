@@ -24,10 +24,17 @@ Limits worth knowing before you rely on this:
 Colab exposes no external REST API -- it has no entry in Google's API
 discovery directory and colab.googleapis.com returns 404 -- so nothing can
 be submitted to it or queried from outside. It does provide an in-notebook
-Python API (google.colab), and this worker uses three parts of it: drive to
-mount storage, userdata to read the API key out of Colab Secrets rather
-than the notebook body, and runtime.unassign to hand the machine back when
-idle.
+Python API (google.colab), and this worker uses two parts of it: userdata to
+read secrets out of Colab Secrets rather than the notebook body, and
+runtime.unassign to hand the machine back when idle.
+
+Storage goes through the Drive REST API (backend/drive_rest.py), NOT
+drive.mount(). Measured 2026-07: mount() fails headless with `ValueError:
+mount failed` because it requires the notebook's consent popup, and
+colabtools#4182 ("allow drive.mount() with Secrets") is still open -- so an
+unattended worker cannot use FUSE at all. The REST path needs no popup and
+answered in 33.8ms from a live runtime. It is also the same code path the
+Kaggle dispatcher uses, so both platforms write Drive identically.
 """
 
 import os
@@ -41,11 +48,29 @@ API_BASE = os.environ.get("CHAINQUANT_API", "https://your-host.example.com")
 
 WORKER_LABEL = os.environ.get("WORKER_LABEL", "colab-1")
 POLL_SECONDS = 5
-DRIVE_ROOT = "/content/drive/MyDrive/chainquant"
+# Local scratch inside the runtime. Results are pushed to Drive over REST at
+# the end of each job; nothing is expected to survive the session.
+WORK_ROOT = os.environ.get("WORK_ROOT", "/content/chainquant")
+# Destination folder inside Drive (created on demand, via drive.file scope).
+DRIVE_FOLDER = os.environ.get("DRIVE_FOLDER", "chainquant")
+DRIVE_SECRET_NAME = os.environ.get("DRIVE_SECRET_NAME", "DRIVE_OAUTH_JSON")
 
 # Release the Colab runtime once the queue has been empty this long, so an
 # unattended worker stops burning the session allowance. 0 disables it.
 IDLE_UNASSIGN_S = int(os.environ.get("IDLE_UNASSIGN_S", "0"))
+
+
+def _secret(name, env_fallback=None):
+    """Reads one value from Colab Secrets, falling back to the environment.
+
+    Notebooks get saved to Drive and shared, so anything pasted into a cell
+    leaks with the file. google.colab.userdata keeps it out of the document.
+    """
+    try:
+        from google.colab import userdata  # type: ignore
+        return userdata.get(name)
+    except Exception:
+        return os.environ.get(env_fallback or name, "")
 
 
 def _api_key():
@@ -55,26 +80,57 @@ def _api_key():
     leaks with the file. google.colab.userdata keeps it out of the document.
     Add it under the key icon in Colab's left sidebar as QUANT_API_KEY.
     """
-    try:
-        from google.colab import userdata  # type: ignore
-        return userdata.get("QUANT_API_KEY")
-    except Exception:
-        return os.environ.get("QUANT_API_KEY", "")
+    return _secret("QUANT_API_KEY")
 
 
 API_KEY = _api_key()
 
 
 def setup():
+    """Installs deps, fetches the shared Drive client, and checks Drive access.
+
+    drive_rest.py is pulled from the admin API rather than pasted in here so
+    there is exactly one implementation shared with the Kaggle dispatcher.
+    """
     import subprocess
     subprocess.run(["pip", "install", "-q", "duckdb", "polars", "requests"], check=False)
+    os.makedirs(WORK_ROOT, exist_ok=True)
+
+    import requests
+    r = requests.get(f"{API_BASE}/api/worker/drive_rest", headers=_headers(), timeout=30)
+    r.raise_for_status()
+    with open("/content/drive_rest.py", "w") as f:
+        f.write(r.text)
+    import sys
+    if "/content" not in sys.path:
+        sys.path.insert(0, "/content")
+
+    raw = _secret(DRIVE_SECRET_NAME)
+    if not raw:
+        print(f"No {DRIVE_SECRET_NAME} in Colab Secrets -- results stay in {WORK_ROOT} "
+              f"and will be lost when the session ends.")
+        return
+    import drive_rest
     try:
-        from google.colab import drive  # type: ignore
-        drive.mount("/content/drive")
-        os.makedirs(DRIVE_ROOT, exist_ok=True)
-        print(f"Drive mounted, data root: {DRIVE_ROOT}")
-    except ImportError:
-        print("Not running in Colab -- skipping Drive mount")
+        token = drive_rest.token_from_secret(raw)
+        info = drive_rest.about(token)
+        q = info.get("storageQuota", {})
+        used = int(q.get("usage", 0)) / 1024 ** 3
+        limit = int(q.get("limit", 0)) / 1024 ** 3 if q.get("limit") else None
+        print(f"Drive reachable as {info.get('user', {}).get('emailAddress')} -- "
+              f"{used:.2f} GB used" + (f" of {limit:.0f} GB" if limit else ""))
+    except Exception as e:
+        print(f"Drive check failed: {e}")
+
+
+def push_to_drive(local_dir, subfolder):
+    """Uploads a finished job's output. Returns None when Drive isn't set up."""
+    raw = _secret(DRIVE_SECRET_NAME)
+    if not raw:
+        return None
+    import drive_rest
+    token = drive_rest.token_from_secret(raw)
+    return drive_rest.upload_tree(token, local_dir, f"{DRIVE_FOLDER}/{subfolder}")
 
 
 def _headers():
@@ -134,7 +190,7 @@ def runtime_specs():
 def run_sql(payload):
     import duckdb
 
-    data_dir = payload.get("drive_path") or DRIVE_ROOT
+    data_dir = payload.get("drive_path") or WORK_ROOT
     if not os.path.isdir(data_dir):
         raise RuntimeError(
             f"Data directory '{data_dir}' does not exist on this worker. Mount Drive and "
@@ -191,7 +247,7 @@ def run_ingest(payload):
 
     symbol = payload["symbol"].upper()
     interval = payload["interval"]
-    out_dir = os.path.join(payload.get("drive_path") or DRIVE_ROOT,
+    out_dir = os.path.join(payload.get("drive_path") or WORK_ROOT,
                            "market", f"symbol={symbol}", f"interval={interval}")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -236,8 +292,21 @@ def run_ingest(payload):
         written.append(ym)
         print(f"  {ym}: {df.height} rows -> Drive")
 
-    return {"symbol": symbol, "interval": interval, "written": written,
-            "skipped": skipped, "total_rows": total_rows, "out_dir": out_dir}
+    result = {"symbol": symbol, "interval": interval, "written": written,
+              "skipped": skipped, "total_rows": total_rows, "out_dir": out_dir}
+
+    if written:
+        # Local disk is wiped when the session ends, so anything worth keeping
+        # has to go to Drive before we report the job done.
+        try:
+            pushed = push_to_drive(out_dir, f"market/symbol={symbol}/interval={interval}")
+            if pushed is None:
+                result["drive"] = {"skipped": "no DRIVE_OAUTH_JSON secret configured"}
+            else:
+                result["drive"] = pushed
+        except Exception as e:
+            result["drive"] = {"error": str(e)[:300]}
+    return result
 
 
 def main():
