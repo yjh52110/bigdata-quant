@@ -1665,3 +1665,180 @@ def test_compaction_endpoint_refuses_paths_outside_the_data_dir():
            "dry_run" in api.CompactionRequest.model_fields
     # Defaulting to a real run would make an accidental call destructive.
     assert api.CompactionRequest.model_fields["dry_run"].default is True
+
+
+# --------------------------------------------------------------------------
+# pump: bulk drain and incremental watch
+# --------------------------------------------------------------------------
+def test_cursor_is_written_after_the_records_not_before(tmp_path):
+    """Advancing first and crashing second silently skips whatever was in flight.
+    A duplicate is cheap; a hole is permanent."""
+    from backend.pump import pump, RateLimiter
+
+    order = []
+
+    def fetch(pos):
+        i = pos or 0
+        return ([{"i": i}], i + 1 if i < 2 else None)
+
+    def sink(rows):
+        order.append(("sink", rows[0]["i"]))
+
+    class SpyCursorOrder:
+        pass
+
+    import backend.pump as pmod
+    real_advance = pmod.Cursor.advance
+
+    def spy_advance(self, **kw):
+        order.append(("cursor", kw.get("position")))
+        return real_advance(self, **kw)
+
+    pmod.Cursor.advance = spy_advance
+    try:
+        pump(name="t", state_root=str(tmp_path), fetch=fetch, sink=sink,
+             limiter=RateLimiter(rate_per_s=1e6))
+    finally:
+        pmod.Cursor.advance = real_advance
+
+    # Every sink call must precede the cursor write that covers it.
+    assert order[0][0] == "sink" and order[1][0] == "cursor"
+    assert [o[0] for o in order] == ["sink", "cursor"] * (len(order) // 2)
+
+
+def test_pump_resumes_from_disk_after_a_restart(tmp_path):
+    """A free runtime is capped at 12 hours; any real backfill outlives one."""
+    from backend.pump import pump, RateLimiter
+    seen_positions = []
+
+    def fetch(pos):
+        i = pos or 0
+        seen_positions.append(i)
+        return ([{"i": i}], i + 1 if i < 5 else None)
+
+    fast = lambda: RateLimiter(rate_per_s=1e6)
+    r1 = pump(name="t", state_root=str(tmp_path), fetch=fetch, sink=lambda x: None,
+              limiter=fast(), max_pages=3)
+    assert r1["status"] == "max_pages" and r1["pages_this_run"] == 3
+
+    r2 = pump(name="t", state_root=str(tmp_path), fetch=fetch, sink=lambda x: None,
+              limiter=fast())
+    assert r2["status"] == "exhausted"
+    # It picked up where it left off rather than starting over.
+    assert seen_positions == [0, 1, 2, 3, 4, 5]
+
+
+def test_exhausted_source_is_not_re_pumped(tmp_path):
+    from backend.pump import pump, RateLimiter
+    calls = {"n": 0}
+
+    def fetch(pos):
+        calls["n"] += 1
+        return ([{"i": 1}], None)
+
+    args = dict(name="t", state_root=str(tmp_path), sink=lambda x: None)
+    pump(fetch=fetch, limiter=RateLimiter(rate_per_s=1e6), **args)
+    out = pump(fetch=fetch, limiter=RateLimiter(rate_per_s=1e6), **args)
+    assert out["status"] == "already_exhausted" and calls["n"] == 1
+
+
+def test_server_retry_after_outranks_the_configured_rate(tmp_path):
+    """The source knows its limits; our configured rate is a guess."""
+    from backend.pump import pump, RateLimiter, RateLimited
+    slept = []
+    lim = RateLimiter(rate_per_s=1e6, sleeper=slept.append)
+    state = {"n": 0}
+
+    def fetch(pos):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise RateLimited("slow down", retry_after=42)
+        return ([{"i": 1}], None)
+
+    out = pump(name="t", state_root=str(tmp_path), fetch=fetch,
+               sink=lambda x: None, limiter=lim)
+    assert out["status"] == "exhausted"
+    assert 42 in slept
+
+
+def test_absurd_retry_after_is_capped(tmp_path):
+    """A bad header must not hang the run for a day."""
+    from backend.pump import RateLimiter, MAX_BACKOFF_S
+    slept = []
+    lim = RateLimiter(rate_per_s=1e6, sleeper=slept.append)
+    lim.penalise(86400)
+    assert slept == [MAX_BACKOFF_S]
+
+
+def test_fetch_failure_leaves_the_cursor_where_it_was(tmp_path):
+    """A retry must re-read the failed page, not skip it."""
+    from backend.pump import pump, PumpError, RateLimiter, Cursor
+
+    def fetch(pos):
+        raise ValueError("network went away")
+
+    with pytest.raises(PumpError, match="network went away"):
+        pump(name="t", state_root=str(tmp_path), fetch=fetch, sink=lambda x: None,
+             limiter=RateLimiter(rate_per_s=1e6))
+    assert Cursor("t", str(tmp_path)).state["position"] is None
+
+
+def test_watch_stores_only_what_it_has_not_seen(tmp_path):
+    """Every "since" API returns overlap at its boundary; without dedup that
+    overlap is stored again on every visit."""
+    from backend.pump import watch, RateLimiter
+    stored = []
+    batch = [{"id": 1, "ts": "2024-01-01"}, {"id": 2, "ts": "2024-01-02"}]
+
+    args = dict(name="w", state_root=str(tmp_path), sink=stored.extend,
+                id_of=lambda r: r["id"], watermark_of=lambda r: r["ts"])
+    r1 = watch(fetch=lambda wm: batch, limiter=RateLimiter(rate_per_s=1e6), **args)
+    assert r1["stored"] == 2 and r1["duplicates"] == 0
+
+    r2 = watch(fetch=lambda wm: batch, limiter=RateLimiter(rate_per_s=1e6), **args)
+    assert r2["stored"] == 0 and r2["duplicates"] == 2
+    assert len(stored) == 2
+
+
+def test_watermark_never_moves_backwards(tmp_path):
+    """An out-of-order page would otherwise open a permanent gap."""
+    from backend.pump import watch, RateLimiter
+    args = dict(name="w", state_root=str(tmp_path), sink=lambda x: None,
+                id_of=lambda r: r["id"], watermark_of=lambda r: r["ts"])
+    watch(fetch=lambda wm: [{"id": 1, "ts": "2024-06-01"}],
+          limiter=RateLimiter(rate_per_s=1e6), **args)
+    out = watch(fetch=lambda wm: [{"id": 2, "ts": "2024-01-01"}],
+                limiter=RateLimiter(rate_per_s=1e6), **args)
+    assert out["watermark"] == "2024-06-01"
+
+
+def test_rate_limiter_actually_limits():
+    """A pump with no limiter gets the account banned."""
+    from backend.pump import RateLimiter
+    slept = []
+    now = {"t": 0.0}
+    lim = RateLimiter(rate_per_s=2, burst=1, sleeper=slept.append,
+                      clock=lambda: now["t"])
+    lim.acquire()          # uses the single burst token
+    lim.acquire()          # must wait 1/2 s
+    assert slept and abs(slept[0] - 0.5) < 1e-6
+
+
+def test_poll_sources_must_pick_a_strategy():
+    """Draining and watching keep different state and fail differently, so the
+    choice cannot be left implicit."""
+    from backend.sources import Source, SourceError, POLL, PUMP, TEXT, L1
+    with pytest.raises(SourceError, match="strategy"):
+        Source(name="x", domain="news", mode=POLL, shape=TEXT, layer=L1,
+               partition_keys=["domain"], fetch=lambda: None, time_column="ts")
+    ok = Source(name="x", domain="news", mode=POLL, shape=TEXT, layer=L1,
+                partition_keys=["domain"], fetch=lambda: None, time_column="ts",
+                strategy=PUMP)
+    assert ok.summary()["strategy"] == "pump"
+
+
+def test_strategy_is_rejected_on_non_poll_sources():
+    from backend.sources import Source, SourceError, BATCH, PUMP
+    with pytest.raises(SourceError, match="only applies to poll"):
+        Source(name="x", domain="market", mode=BATCH, fetch=lambda: None,
+               partition_keys=["domain"], time_column="ts", strategy=PUMP)

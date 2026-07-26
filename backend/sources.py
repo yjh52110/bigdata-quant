@@ -21,7 +21,12 @@ Access mode is the axis that actually matters, and there are three, not two:
 
   poll       Only reachable through an API or a page, with no archive. If we do
              not capture it, it is gone -- these are the sources that genuinely
-             justify Drive storage.
+             justify Drive storage. Two strategies, which fail differently and so
+             are separate in backend/pump.py:
+               pump   drain a paginated source; the rate limit binds, not bandwidth
+               watch  ask for what is new and store what has not been seen; output
+                      arrives a few records at a time, so it walks straight into
+                      the fragmentation penalty and depends on compaction
 
 What a source must declare is deliberately small: where its output lands, how it
 is partitioned, and what its rows look like. Everything source-specific stays
@@ -40,6 +45,10 @@ IN_PLACE = "in_place"
 BATCH = "batch"
 POLL = "poll"
 MODES = (IN_PLACE, BATCH, POLL)
+
+# For POLL sources: drain it once, or keep visiting it.
+PUMP, WATCH = "pump", "watch"
+STRATEGIES = (PUMP, WATCH)
 
 # Broad shape of the payload, because it decides the storage treatment rather
 # than anything about the origin: tabular and text both become Parquet columns,
@@ -68,6 +77,7 @@ class Source:
     locator: Optional[str] = None
     freshness_days: Optional[float] = None
     time_column: Optional[str] = None
+    strategy: Optional[str] = None     # pump | watch, for POLL sources
     notes: str = ""
 
     def __post_init__(self) -> None:
@@ -77,6 +87,12 @@ class Source:
             raise SourceError(f"{self.name}: shape must be one of {SHAPES}, got {self.shape!r}")
         if self.layer not in LAYERS:
             raise SourceError(f"{self.name}: layer must be one of {LAYERS}, got {self.layer!r}")
+        if self.mode == POLL and self.strategy not in STRATEGIES:
+            raise SourceError(
+                f"{self.name}: a poll source must pick a strategy from {STRATEGIES} -- "
+                f"draining and watching need different state and fail differently")
+        if self.mode != POLL and self.strategy is not None:
+            raise SourceError(f"{self.name}: strategy only applies to poll sources")
         if self.mode == IN_PLACE:
             if not self.locator:
                 raise SourceError(f"{self.name}: an in_place source needs a locator")
@@ -108,7 +124,8 @@ class Source:
             "name": self.name, "domain": self.domain, "mode": self.mode,
             "shape": self.shape, "layer": self.layer,
             "partition_keys": self.partition_keys, "locator": self.locator,
-            "freshness_days": self.freshness_days, "notes": self.notes,
+            "freshness_days": self.freshness_days, "strategy": self.strategy,
+            "notes": self.notes,
             "stored_on_drive": self.mode != IN_PLACE,
         }
 
