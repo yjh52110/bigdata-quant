@@ -1507,3 +1507,47 @@ def test_stale_running_requests_are_reclaimed(tmp_path):
     q.requests[key]["reserved_at"] = time.time() - 7200
     assert q.reclaim_stale(older_than_s=3600) == 1
     assert q.stats()["pending"] == 1
+
+
+def test_range_read_builds_an_inclusive_header(monkeypatch):
+    """Drive honours Range on alt=media -- verified 2026-07-26, a 1 MiB request
+    against a 200 MB file returned 206 with Content-Range 0-1048575/209715200."""
+    import backend.drive_rest as dr
+    seen = {}
+
+    def fake(url, method="GET", data=None, headers=None, timeout=0):
+        seen["url"], seen["headers"] = url, headers
+        return 206, {}, b"x" * 16
+
+    monkeypatch.setattr(dr, "_request", fake)
+    dr.read_range("tok", "fid", 0, 15)
+    assert seen["headers"]["Range"] == "bytes=0-15"
+    assert "alt=media" in seen["url"]
+
+
+def test_range_read_rejects_a_backwards_range():
+    from backend.drive_rest import read_range, DriveError
+    with pytest.raises(DriveError, match="bad range"):
+        read_range("tok", "fid", 10, 5)
+
+
+def test_duckdb_attach_passes_the_token_as_a_header_not_a_url_param(monkeypatch):
+    """A token in the URL would land in DuckDB's query log and in any error
+    message quoting the SQL."""
+    import backend.drive_rest as dr
+    executed = []
+
+    class FakeCon:
+        def execute(self, sql):
+            executed.append(sql)
+
+    dr.duckdb_attach(FakeCon(), "SECRET-TOKEN")
+    joined = " ".join(executed)
+    assert "httpfs" in joined
+    assert "EXTRA_HTTP_HEADERS" in joined and "Authorization" in joined
+    assert "?access_token=" not in joined
+
+
+def test_media_url_shape():
+    from backend.drive_rest import media_url
+    assert media_url("abc") == "https://www.googleapis.com/drive/v3/files/abc?alt=media"

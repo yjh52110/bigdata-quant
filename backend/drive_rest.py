@@ -232,14 +232,20 @@ def find_file(token: str, name: str, parent: Optional[str] = None) -> Optional[D
     return files[0] if files else None
 
 
-def download(token: str, file_id: str, dest_path: str) -> Dict[str, Any]:
+def download(token: str, file_id: str, dest_path: str,
+             start: Optional[int] = None, end: Optional[int] = None) -> Dict[str, Any]:
     """Streams one file down, reporting throughput.
 
     Uses alt=media on the files endpoint; the drive.file scope covers reading
-    back anything this client wrote.
+    back anything this client wrote. Pass start/end for a partial fetch -- but
+    for analytics prefer duckdb_attach(), which lets the reader decide which
+    ranges it needs instead of guessing here.
     """
-    url = f"{API}/files/{file_id}?alt=media"
-    req = urllib.request.Request(url, headers=_auth(token))
+    url = media_url(file_id)
+    headers = dict(_auth(token))
+    if start is not None:
+        headers["Range"] = f"bytes={start}-{'' if end is None else end}"
+    req = urllib.request.Request(url, headers=headers)
     started = time.time()
     total = 0
     try:
@@ -257,6 +263,44 @@ def download(token: str, file_id: str, dest_path: str) -> Dict[str, Any]:
     elapsed = max(1e-6, time.time() - started)
     return {"bytes": total, "seconds": round(elapsed, 2),
             "mb_per_s": round(total / 1024 ** 2 / elapsed, 2)}
+
+
+def media_url(file_id: str) -> str:
+    """The alt=media URL for a file, which is what a range-capable reader needs."""
+    return f"{API}/files/{file_id}?alt=media"
+
+
+def read_range(token: str, file_id: str, start: int, end: int) -> bytes:
+    """Bytes [start, end] inclusive. Drive honours Range on alt=media.
+
+    Verified 2026-07-26: a 1 MiB range against a 200 MB file returned HTTP 206
+    with Content-Range bytes 0-1048575/209715200.
+    """
+    if start < 0 or end < start:
+        raise DriveError(f"bad range {start}-{end}")
+    status, _, body = _request(media_url(file_id),
+                               headers={**_auth(token), "Range": f"bytes={start}-{end}"})
+    if status not in (200, 206):
+        raise DriveError(f"range read failed: HTTP {status} {body.decode(errors='ignore')[:200]}")
+    return body
+
+
+def duckdb_attach(con, token: str) -> None:
+    """Lets DuckDB read Drive files in place, without downloading them first.
+
+    httpfs issues ranged GETs, so a query pays for the columns and row groups it
+    touches rather than the whole file. Measured on a 43 MB factor file over the
+    same link: footer only 3.4s, one column 7.8-8.9s, two columns 12.2-12.6s,
+    all eight 24.4-27.1s, whole-file download 22.0s. So narrow queries are worth
+    roughly 3x, and only a genuinely all-column read costs more than downloading.
+
+    The token expires in about an hour; re-run this to refresh it.
+    """
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    # A secret rather than a URL parameter: the token would otherwise end up in
+    # DuckDB's query log and in any error message quoting the SQL.
+    con.execute("CREATE OR REPLACE SECRET gdrive (TYPE http, "
+                f"EXTRA_HTTP_HEADERS MAP {{'Authorization': 'Bearer {token}'}});")
 
 
 def upload_tree(token: str, local_dir: str, drive_path: str) -> Dict[str, Any]:
