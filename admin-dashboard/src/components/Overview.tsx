@@ -4,8 +4,14 @@ import { Activity, Database, Clock, Zap } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
 
+// Rows across every derived dataset -- the "TB compressed into GB" figure, and
+// the only number here that reflects work this platform actually did.
+const rowsTotal = (d: any) =>
+  (d?.drive?.catalog ?? []).reduce((n: number, e: any) => n + (e.rows ?? 0), 0);
+
 export default function Overview() {
   const { t } = useI18n();
+  const [sources, setSources] = useState<any>(null);
   const [stats, setStats] = useState({
     activeAccounts: 0,
     totalDataSize: '0 GB',
@@ -19,7 +25,8 @@ export default function Overview() {
 
   useEffect(() => {
     const load = () => {
-      apiFetch('/api/overview').then(r => r.json()).then(setStats).catch(console.error);
+      apiFetch('/api/datasources').then(r => r.json()).then(setSources).catch(console.error);
+    apiFetch('/api/overview').then(r => r.json()).then(setStats).catch(console.error);
       apiFetch('/api/overview/traffic').then(r => r.json()).then(setTraffic).catch(console.error);
     };
     load();
@@ -97,30 +104,29 @@ export default function Overview() {
         </div>
 
         <div className="glass-panel p-5 flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-white">{t('ov.leaderboard')}</h3>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-400 uppercase tracking-wide">{t('ov.previewBadge')}</span>
-          </div>
-          <p className="text-xs text-slate-500 mb-3">
-            {t('ov.leaderboardNote')}
-          </p>
-          <div className="flex-1 overflow-y-auto space-y-3 pr-2 opacity-60">
+          <h3 className="text-lg font-semibold text-white mb-1">{t('ov.pipeline')}</h3>
+          <p className="text-xs text-slate-500 mb-4">{t('ov.pipelineNote')}</p>
+          <div className="flex-1 space-y-3">
             {[
-              { name: "Alpha-Omega-01", roi: "+24.5%", sharp: "2.4" },
-              { name: "Mean-Rev-BTC", roi: "+18.2%", sharp: "1.9" },
-              { name: "Arb-Flash-Bot", roi: "+12.1%", sharp: "3.1" },
-            ].map((strat, i) => (
-              <div key={i} className="bg-slate-800/40 border border-slate-700/50 rounded-lg p-3 flex justify-between items-center">
-                <div>
-                  <h4 className="text-sm font-semibold text-slate-200">{strat.name}</h4>
-                  <p className="text-xs text-slate-400">Sharpe: {strat.sharp}</p>
+              { label: t('ov.pipeS3'), v: sources ? `${(sources.s3.total_gb / 1024).toFixed(2)} TB` : '—',
+                sub: sources ? t('ov.pipeS3Sub', { n: sources.s3.chains.length }) : '', tone: 'text-blue-400' },
+              { label: t('ov.pipeDrive'), v: sources ? `${(sources.drive.summary.total_bytes / 1048576).toFixed(1)} MB` : '—',
+                sub: sources ? t('ov.pipeDriveSub', { n: sources.drive.summary.total_datasets }) : '', tone: 'text-purple-400' },
+              { label: t('ov.pipeRows'), v: sources ? rowsTotal(sources).toLocaleString() : '—',
+                sub: t('ov.pipeRowsSub'), tone: 'text-emerald-400' },
+            ].map((row, i) => (
+              <div key={i} className="bg-slate-800/40 border border-slate-700/50 rounded-lg p-3 flex justify-between items-center gap-3">
+                <div className="min-w-0">
+                  <h4 className="text-sm font-semibold text-slate-200">{row.label}</h4>
+                  <p className="text-xs text-slate-500 break-words">{row.sub}</p>
                 </div>
-                <div className="text-emerald-400 font-bold text-sm bg-emerald-500/10 px-2 py-1 rounded">
-                  {strat.roi}
-                </div>
+                <div className={`font-bold text-sm shrink-0 ${row.tone}`}>{row.v}</div>
               </div>
             ))}
           </div>
+          {sources?.drive.catalog?.length === 0 && (
+            <p className="text-xs text-amber-300/80 mt-3">{t('ov.pipeEmpty')}</p>
+          )}
         </div>
       </div>
     </div>

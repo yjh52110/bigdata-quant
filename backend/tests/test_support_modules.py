@@ -1266,3 +1266,15 @@ def test_certificate_failures_are_not_retried_and_name_the_fix():
         assert calls["n"] == 1
     finally:
         dr.urllib.request.urlopen = orig
+
+
+def test_dashboard_has_no_placeholder_strategy_data():
+    """The overview carried a hardcoded leaderboard (Alpha-Omega-01 etc.) labelled
+    as illustrative. Now that a real factor exists, the panel shows live readings
+    instead -- and the fixture names must not creep back in."""
+    import pathlib
+    src = pathlib.Path("admin-dashboard/src").rglob("*.tsx")
+    for f in src:
+        text = f.read_text()
+        for fake in ("Alpha-Omega-01", "Mean-Rev-BTC", "Arb-Flash-Bot"):
+            assert fake not in text, f"{fake} still present in {f.name}"
