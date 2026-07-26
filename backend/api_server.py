@@ -844,13 +844,24 @@ def scheduler_plan(req: PlanRequest):
     session regardless of platform, and the per-account 750 GB/day allowance --
     not throughput -- is what bounds anything large.
     """
+    # Feed in what has actually been uploaded today, per account. Without this
+    # the planner is blind to the 750 GB/day cap and will happily assign work to
+    # an account that has none left -- the plan would look fine and the transfers
+    # would fail.
+    today = get_today_totals()
+    used_today = {acct: v.get("upload_bytes", 0)
+                  for acct, v in (today.get("by_account") or {}).items()}
     try:
         plan = scheduler.plan_job(req.total_bytes,
                                   accounts=account_manager.get_all_quotas(),
+                                  used_today=used_today,
                                   max_parallelism=req.max_parallelism)
     except scheduler.SchedulerError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return plan.as_dict()
+    out = plan.as_dict()
+    out["used_today"] = used_today
+    out["used_today_disclaimer"] = today.get("self_tracked_disclaimer")
+    return out
 
 
 @app.get("/api/scheduler/limits")

@@ -2214,3 +2214,26 @@ def test_aggregate_rate_applies_the_measured_penalty_once():
     five = aggregate_rate_mb_s({KAGGLE: 5})
     assert five > solo * 4          # scales
     assert five < solo * 5          # but not perfectly
+
+
+def test_planner_is_fed_real_daily_usage(monkeypatch):
+    """The planner accepted used_today from the start but the endpoint never
+    passed it, so it was blind to the 750 GB/day cap: a plan would look fine and
+    the transfers would then fail on an account with nothing left."""
+    import inspect
+    import backend.api_server as api
+    src = inspect.getsource(api.scheduler_plan)
+    assert "get_today_totals()" in src
+    assert "used_today=used_today" in src
+    assert "by_account" in src
+
+
+def test_planner_skips_accounts_that_spent_their_day(monkeypatch):
+    from backend.scheduler import plan_job, DAILY_UPLOAD_BYTES
+    tb = 1024 ** 4
+    accs = [{"account_index": n, "is_connected": True, "used": int(0.5 * tb),
+             "limit": int(5 * tb), "free": int(4.5 * tb)}
+            for n in ("spent", "fresh")]
+    plan = plan_job(100 * 1024 ** 3, accounts=accs,
+                   used_today={"spent": DAILY_UPLOAD_BYTES})
+    assert {s.account for s in plan.slots} == {"fresh"}
