@@ -66,3 +66,10 @@ backend/data/kaggle_jobs.json
 # Catalog: holds Drive folder ids and per-account placement. Not a credential,
 # but it describes private storage layout and is machine-specific state, not source.
 backend/data/_catalog/
+
+# Orchestration layer runs in its own virtualenv: omegaconf pins
+# antlr4-python3-runtime==4.9.* while Dagster's selection parser needs 4.13,
+# and the two cannot coexist in one environment.
+.venv-orch/
+.dagster_home/
+backend/data/_archive/
