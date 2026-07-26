@@ -61,8 +61,15 @@ class Dataset:
     """Append-only records, flushed into properly sized Parquet files."""
 
     def __init__(self, name: str, root: str, *, time_column: Optional[str] = None,
+                 writer: Optional[str] = None,
                  flush_bytes: int = FLUSH_BYTES, flush_seconds: int = FLUSH_SECONDS):
         self.name = name
+        # Part of every filename. Two sessions writing the same dataset both
+        # started at part-00000 and the second overwrote the first locally --
+        # verified -- and on Drive, which allows duplicate names, it would instead
+        # leave two files a glob reads as duplicated rows. Neither is acceptable,
+        # and neither needs coordination to avoid: just make the names disjoint.
+        self.writer = writer or f"w{os.getpid():05d}"
         self.dir = os.path.join(root, name)
         os.makedirs(self.dir, exist_ok=True)
         self.time_column = time_column
@@ -108,7 +115,7 @@ class Dataset:
         if self.time_column and self.time_column in df.columns:
             df = df.sort(self.time_column)
         seq = len(self.files)
-        path = os.path.join(self.dir, f"part-{seq:05d}.parquet")
+        path = os.path.join(self.dir, f"part-{self.writer}-{seq:05d}.parquet")
         df.write_parquet(path, compression=COMPRESSION)
 
         info = {"path": path, "rows": df.height, "bytes": os.path.getsize(path),
@@ -128,7 +135,7 @@ class Dataset:
 
     def stats(self) -> Dict[str, Any]:
         return {
-            "name": self.name, "dir": self.dir,
+            "name": self.name, "dir": self.dir, "writer": self.writer,
             "files": len(self.files),
             "rows": sum(f["rows"] for f in self.files),
             "bytes": sum(f["bytes"] for f in self.files),
@@ -238,11 +245,22 @@ class RequestQueue:
     12 hours, and any crawl worth running outlives one session.
     """
 
-    def __init__(self, name: str, root: str, *, max_attempts: int = MAX_ATTEMPTS):
+    def __init__(self, name: str, root: str, *, max_attempts: int = MAX_ATTEMPTS,
+                 worker: int = 0, workers: int = 1):
         self.name = name
         self.dir = os.path.join(root, name)
         os.makedirs(self.dir, exist_ok=True)
-        self.path = os.path.join(self.dir, "queue.json")
+        # One file per worker, and each worker only ever reserves keys that hash
+        # into its own slice. Two crawlers sharing one file both reserved the
+        # same URL -- verified -- because reserve() is a read-modify-write with
+        # nothing to serialise it. Partitioning the key space removes the race
+        # instead of trying to lock around it.
+        self.worker = worker
+        self.workers = max(1, workers)
+        if not 0 <= worker < self.workers:
+            raise CollectionError(f"worker {worker} outside 0..{self.workers - 1}")
+        suffix = "" if self.workers == 1 else f".w{worker}"
+        self.path = os.path.join(self.dir, f"queue{suffix}.json")
         self.max_attempts = max_attempts
         self.requests: Dict[str, Dict[str, Any]] = {}
         self._load()
@@ -266,10 +284,20 @@ class RequestQueue:
         # Atomic: a half-written queue would lose the crawl's position.
         os.replace(tmp, self.path)
 
+    def owns(self, key: str) -> bool:
+        """Whether this worker is responsible for a key."""
+        if self.workers == 1:
+            return True
+        return int(key[:8], 16) % self.workers == self.worker
+
     def add(self, url: str, *, method: str = "GET", payload: Any = None,
             meta: Optional[Dict[str, Any]] = None) -> Tuple[str, bool]:
-        """Returns (key, added). added is False when it was already known."""
+        """Returns (key, added). added is False when known, or not ours."""
         key = self.key_for(url, method, payload)
+        if not self.owns(key):
+            # Discovered by us, but another worker's to fetch. Saying so beats
+            # silently dropping it: the caller can hand it over.
+            return key, False
         if key in self.requests:
             return key, False
         self.requests[key] = {

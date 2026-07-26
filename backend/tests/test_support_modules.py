@@ -2052,3 +2052,67 @@ def test_a_pre_sharding_catalog_is_not_lost(tmp_path):
     path.write_text(_json.dumps({"datasets": [
         {"dataset": "old_one", "layer": "L2_features", "rows": 7, "updated_at": 1}]}))
     assert Catalog(str(path)).get("old_one")["rows"] == 7
+
+
+def test_two_writers_on_one_dataset_do_not_overwrite_each_other(tmp_path):
+    """Verified before the fix: both sessions started at part-00000 and the
+    second overwrote the first locally. On Drive, which allows duplicate names,
+    it would instead leave two files a glob reads as duplicated rows."""
+    import polars as pl
+    from backend.collections import Dataset
+    a = Dataset("news", str(tmp_path), time_column="ts", writer="s1")
+    b = Dataset("news", str(tmp_path), time_column="ts", writer="s2")
+    a.push([{"ts": 1, "v": "A"}]); a.flush("x")
+    b.push([{"ts": 2, "v": "B"}]); b.flush("x")
+
+    files = sorted(os.listdir(a.dir))
+    assert len(files) == 2, files
+    rows = pl.read_parquet(os.path.join(a.dir, "*.parquet")).sort("ts").to_dicts()
+    assert rows == [{"ts": 1, "v": "A"}, {"ts": 2, "v": "B"}]
+
+
+def test_writer_id_defaults_to_something_unique_per_process(tmp_path):
+    from backend.collections import Dataset
+    ds = Dataset("x", str(tmp_path), time_column="ts")
+    assert ds.writer and ds.writer != ""
+
+
+def test_sharded_queue_gives_every_url_to_exactly_one_worker(tmp_path):
+    """Verified before the fix: two crawlers sharing one file both reserved the
+    same URL, because reserve() is a read-modify-write with nothing serialising
+    it. Partitioning the key space removes the race rather than locking around
+    it."""
+    from backend.collections import RequestQueue
+    workers = [RequestQueue("crawl", str(tmp_path), worker=i, workers=3) for i in range(3)]
+    urls = [f"https://x.test/{i}" for i in range(30)]
+    for q in workers:
+        for u in urls:
+            q.add(u)          # every worker sees every URL; each keeps only its own
+
+    assert sum(q.stats()["total"] for q in workers) == len(urls)
+
+    fetched = []
+    for q in workers:
+        while True:
+            r = q.reserve()
+            if not r:
+                break
+            fetched.append(r["url"])
+            q.complete(r["key"])
+    assert sorted(fetched) == sorted(urls)          # none missed
+    assert len(fetched) == len(set(fetched))        # none twice
+
+
+def test_each_queue_worker_has_its_own_file(tmp_path):
+    from backend.collections import RequestQueue
+    a = RequestQueue("crawl", str(tmp_path), worker=0, workers=2)
+    b = RequestQueue("crawl", str(tmp_path), worker=1, workers=2)
+    assert a.path != b.path
+    # A single-worker queue keeps the original filename, so existing state loads.
+    assert RequestQueue("crawl", str(tmp_path)).path.endswith("queue.json")
+
+
+def test_queue_worker_index_is_validated(tmp_path):
+    from backend.collections import RequestQueue, CollectionError
+    with pytest.raises(CollectionError, match="outside"):
+        RequestQueue("crawl", str(tmp_path), worker=5, workers=3)
