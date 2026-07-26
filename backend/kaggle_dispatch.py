@@ -434,6 +434,83 @@ elif kind == "formatbench":
     result["variants"] = variants
     import shutil as _sh; _sh.rmtree(work, ignore_errors=True)
 
+elif kind == "factor":
+    # The first L2 job: read S3 in place, compute, write zstd parquet, push to
+    # Drive. Deliberately selects five of token_transfers' eleven columns --
+    # measured, one column of a 1400 MB file transfers 0.29% of it, so the column
+    # list is what decides the cost of this job.
+    pip("duckdb")
+    import duckdb
+
+    days = PARAMS["days"]
+    lo, hi = min(days), max(days)
+    # A date prefix narrow enough that the wildcard's directory listing stays
+    # cheap; a whole-year glob costs about twice a single day's.
+    prefix = os.path.commonprefix([lo, hi]).rstrip("-")
+    glob = (f"s3://aws-public-blockchain/v1.0/eth/token_transfers/"
+            f"date={prefix}*/*.parquet")
+
+    con = duckdb.connect(":memory:")
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    con.execute("CREATE OR REPLACE SECRET pub (TYPE s3, PROVIDER config, REGION 'us-east-1');")
+
+    dest = os.path.join(OUT, "factor")
+    os.makedirs(dest, exist_ok=True)
+    path = os.path.join(dest, f"addr_flow_1d_{lo}_{hi}.parquet")
+
+    # Per-address daily in/out flow and counterparty breadth -- the shape most
+    # on-chain factors start from.
+    sql = f"""
+    WITH t AS (
+        SELECT date, token_address, from_address, to_address, value
+        FROM read_parquet('{glob}', hive_partitioning=1)
+        WHERE date BETWEEN DATE '{lo}' AND DATE '{hi}'
+    ),
+    flows AS (
+        SELECT date, from_address AS address, token_address,
+               -value AS signed_value, to_address AS counterparty FROM t
+        UNION ALL
+        SELECT date, to_address AS address, token_address,
+                value AS signed_value, from_address AS counterparty FROM t
+    )
+    SELECT
+        date,
+        address,
+        count(*)                                   AS transfer_count,
+        count(DISTINCT token_address)              AS token_count,
+        count(DISTINCT counterparty)               AS counterparty_count,
+        sum(CASE WHEN signed_value > 0 THEN signed_value ELSE 0 END) AS inflow,
+        sum(CASE WHEN signed_value < 0 THEN -signed_value ELSE 0 END) AS outflow,
+        sum(signed_value)                          AS net_flow
+    FROM flows
+    GROUP BY 1, 2
+    HAVING count(*) >= {int(PARAMS.get("min_transfers", 2))}
+    -- Sorted by time: without it every row group's min/max spans the whole
+    -- period and no predicate can skip a group on read.
+    ORDER BY date, address
+    """
+    t0 = time.time()
+    con.execute(f"COPY ({sql}) TO '{path}' (FORMAT PARQUET, COMPRESSION 'zstd')")
+    compute_s = time.time() - t0
+
+    size = os.path.getsize(path)
+    stats = con.execute(
+        f"SELECT count(*), min(date), max(date), count(DISTINCT address) "
+        f"FROM read_parquet('{path}')").fetchone()
+    result["factor"] = {
+        "name": "addr_flow_1d",
+        "file": os.path.basename(path),
+        "rows": stats[0],
+        "time_min": str(stats[1]),
+        "time_max": str(stats[2]),
+        "addresses": stats[3],
+        "bytes": size,
+        "mb": round(size / 1024**2, 2),
+        "compute_seconds": round(compute_s, 2),
+        "days_requested": len(days),
+        "columns_read": 5,
+    }
+
 elif kind == "drivecheck":
     # Answers "can a Kaggle kernel reach our Drive?" with measurements rather
     # than assumption. Kaggle has no FUSE mount at all (google.colab.drive

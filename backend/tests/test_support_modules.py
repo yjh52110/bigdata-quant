@@ -1180,3 +1180,89 @@ def test_view_name_is_derivable_without_a_round_trip():
     from backend.s3_views import view_name
     assert view_name("eth", "blocks", "2024-01-15") == "s3_eth_blocks_2024_01_15"
     assert view_name("cronos", "decoded-events") == "s3_cronos_decoded_events"
+
+
+def test_factor_job_reads_only_the_columns_it_needs():
+    """token_transfers has 11 columns; the factor needs 5. Measured, one column of
+    a 1400 MB file transfers 0.29% of it -- the column list is what decides this
+    job's cost, so a SELECT * would quietly multiply it."""
+    from backend.kaggle_dispatch import render_script
+    src = render_script({"kind": "factor", "days": ["2024-01-15"]})
+    compile(src, "job.py", "exec")
+    assert "SELECT date, token_address, from_address, to_address, value" in src
+    for unused in ("transaction_hash", "block_hash", "last_modified"):
+        assert unused not in src, unused
+
+
+def test_factor_output_follows_the_storage_rules():
+    """zstd and an explicit time sort, per drive_store: without the sort every row
+    group's statistics span the whole period and nothing can be skipped on read."""
+    from backend.kaggle_dispatch import render_script
+    from backend.drive_store import COMPRESSION
+    src = render_script({"kind": "factor", "days": ["2024-01-15"]})
+    assert f"COMPRESSION '{COMPRESSION}'" in src
+    assert "ORDER BY date, address" in src
+
+
+def test_factor_narrows_the_glob_to_the_requested_range():
+    """A whole-year wildcard costs about twice a single day's, and the difference
+    is directory listing rather than data."""
+    from backend.kaggle_dispatch import render_script
+    src = render_script({"kind": "factor", "days": ["2024-01-15", "2024-01-21"]})
+    assert "os.path.commonprefix" in src
+    assert "WHERE date BETWEEN" in src
+
+
+def test_transient_network_errors_retry_but_answers_do_not():
+    """A bare SSL EOF against oauth2.googleapis.com killed a dispatch outright.
+    Transport hiccups say nothing about the request and must be retried; an HTTP
+    status is a real answer and retrying would return the same thing."""
+    import backend.drive_rest as dr
+
+    calls = {"n": 0}
+
+    class Boom(dr.urllib.error.URLError):
+        def __init__(self):
+            super().__init__("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred")
+
+    def flaky(req, timeout=0):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise Boom()
+        class R:
+            status = 200
+            headers = {}
+            def read(self): return b'{"ok": true}'
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        return R()
+
+    orig_open, orig_sleep = dr.urllib.request.urlopen, dr.time.sleep
+    dr.urllib.request.urlopen = flaky
+    dr.time.sleep = lambda s: None
+    try:
+        status, _, body = dr._request("https://oauth2.googleapis.com/token")
+        assert status == 200 and calls["n"] == 3
+    finally:
+        dr.urllib.request.urlopen, dr.time.sleep = orig_open, orig_sleep
+
+
+def test_certificate_failures_are_not_retried_and_name_the_fix():
+    """Retrying a missing CA store just wastes time, and the raw message reads as
+    a network outage."""
+    import backend.drive_rest as dr
+
+    calls = {"n": 0}
+
+    def always_cert_fail(req, timeout=0):
+        calls["n"] += 1
+        raise dr.urllib.error.URLError("[SSL: CERTIFICATE_VERIFY_FAILED] bad")
+
+    orig = dr.urllib.request.urlopen
+    dr.urllib.request.urlopen = always_cert_fail
+    try:
+        with pytest.raises(dr.DriveError, match="SSL_CERT_FILE"):
+            dr._request("https://oauth2.googleapis.com/token")
+        assert calls["n"] == 1
+    finally:
+        dr.urllib.request.urlopen = orig

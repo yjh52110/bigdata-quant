@@ -1,0 +1,56 @@
+{
+  "updated_at": 1785028864.93608,
+  "datasets": [
+    {
+      "dataset": "features_addr_flow_1d_2024_01",
+      "layer": "L2_features",
+      "path": "chainquant/L2_features/name=addr_flow_1d/date=2024-01",
+      "partition_keys": [
+        "name",
+        "date"
+      ],
+      "drive_folder_id": "115Ug5bIeFM-t9CJ6NnSsU6syBH3klixC",
+      "rows": 1131626,
+      "bytes": 45105011,
+      "files": 1,
+      "time_min": "2024-01-15",
+      "time_max": "2024-01-21",
+      "schema": [
+        {
+          "name": "date",
+          "type": "DATE"
+        },
+        {
+          "name": "address",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "transfer_count",
+          "type": "BIGINT"
+        },
+        {
+          "name": "token_count",
+          "type": "BIGINT"
+        },
+        {
+          "name": "counterparty_count",
+          "type": "BIGINT"
+        },
+        {
+          "name": "inflow",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "outflow",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "net_flow",
+          "type": "DOUBLE"
+        }
+      ],
+      "source": "eth token_transfers (S3 in place, 5 of 11 columns)",
+      "updated_at": 1785028864.935849
+    }
+  ]
+}

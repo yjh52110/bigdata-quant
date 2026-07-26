@@ -42,27 +42,45 @@ class DriveError(RuntimeError):
     pass
 
 
+# Transport-level hiccups that say nothing about the request. Seen in practice:
+# a bare SSL EOF against oauth2.googleapis.com killed a dispatch outright. An
+# unattended pipeline must not die on one of these.
+_TRANSIENT = ("UNEXPECTED_EOF_WHILE_READING", "EOF occurred", "timed out",
+              "Connection reset", "Temporary failure in name resolution",
+              "Remote end closed")
+NET_RETRIES = 3
+
+
 def _request(url: str, *, method: str = "GET", data: Optional[bytes] = None,
              headers: Optional[Dict[str, str]] = None, timeout: int = 120):
-    req = urllib.request.Request(url, data=data, method=method,
-                                 headers=headers or {})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = r.read()
-            return r.status, dict(r.headers), body
-    except urllib.error.HTTPError as e:
-        # An HTTP status is a real answer, including 401/403 -- hand it back so
-        # callers can distinguish "Google said no" from "never reached Google".
-        return e.code, dict(e.headers), e.read()
-    except urllib.error.URLError as e:
-        # Never reached Google: DNS, no egress, or an empty CA store. Raise a
-        # named error rather than letting a bare URLError escape, and call out
-        # the certificate case because it reads as a network outage otherwise.
-        reason = str(getattr(e, "reason", e))
-        if "CERTIFICATE_VERIFY_FAILED" in reason:
-            reason += (" -- this Python has no populated CA store; set SSL_CERT_FILE "
-                       "to a CA bundle (Colab and Kaggle runtimes are fine)")
-        raise DriveError(f"could not reach {urllib.parse.urlsplit(url).netloc}: {reason}")
+    attempt = 0
+    while True:
+        req = urllib.request.Request(url, data=data, method=method,
+                                     headers=headers or {})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body = r.read()
+                return r.status, dict(r.headers), body
+        except urllib.error.HTTPError as e:
+            # An HTTP status is a real answer, including 401/403 -- hand it back
+            # so callers can distinguish "Google said no" from "never reached
+            # Google". Never retried: the answer would be the same.
+            return e.code, dict(e.headers), e.read()
+        except urllib.error.URLError as e:
+            # Never reached Google: DNS, no egress, or an empty CA store. Call
+            # out the certificate case because it otherwise reads as an outage.
+            reason = str(getattr(e, "reason", e))
+            if "CERTIFICATE_VERIFY_FAILED" in reason:
+                raise DriveError(
+                    f"could not reach {urllib.parse.urlsplit(url).netloc}: {reason}"
+                    " -- this Python has no populated CA store; set SSL_CERT_FILE"
+                    " to a CA bundle (Colab and Kaggle runtimes are fine)")
+            attempt += 1
+            if attempt > NET_RETRIES or not any(t in reason for t in _TRANSIENT):
+                raise DriveError(
+                    f"could not reach {urllib.parse.urlsplit(url).netloc}: {reason}"
+                    + (f" (after {NET_RETRIES} retries)" if attempt > NET_RETRIES else ""))
+            time.sleep(2 ** attempt)
 
 
 def _json_request(url: str, **kw) -> Any:
