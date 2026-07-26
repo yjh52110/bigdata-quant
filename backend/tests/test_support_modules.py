@@ -1,5 +1,7 @@
 import importlib
 import json
+import os
+import time
 
 import pytest
 
@@ -1390,3 +1392,118 @@ def test_source_output_path_matches_the_storage_convention():
     from backend.sources import get
     p = get("addr_flow_1d").output_path(name="addr_flow_1d", date="2024-01")
     assert p == "chainquant/L2_features/name=addr_flow_1d/date=2024-01"
+
+
+# --------------------------------------------------------------------------
+# collections: Apify-shaped storage for collection work
+# --------------------------------------------------------------------------
+def test_dataset_buffers_instead_of_writing_every_batch(tmp_path):
+    """A scraper emits tens of records at a time. Writing each batch out would
+    produce thousands of tiny files, and 5.9 MB uploads at 1.53 MB/s against
+    36.56 MB/s for 200 MB -- a 24x penalty paid again on every read."""
+    from backend.collections import Dataset
+    ds = Dataset("news", str(tmp_path), time_column="ts")
+    for i in range(50):
+        out = ds.push([{"ts": i, "title": f"t{i}"}])
+        assert out["flushed"] is None          # nothing written yet
+    assert ds.stats()["files"] == 0
+    assert ds.stats()["buffered_records"] == 50
+
+
+def test_dataset_flush_sorts_by_time_and_uses_zstd(tmp_path):
+    """Unsorted output means every row group's statistics span the whole period
+    and a predicate can skip nothing."""
+    import polars as pl
+    from backend.collections import Dataset
+    ds = Dataset("news", str(tmp_path), time_column="ts")
+    ds.push([{"ts": 3, "v": "c"}, {"ts": 1, "v": "a"}, {"ts": 2, "v": "b"}])
+    info = ds.flush("explicit")
+    got = pl.read_parquet(info["path"])
+    assert got["ts"].to_list() == [1, 2, 3]
+    meta = pl.read_parquet_schema(info["path"])
+    assert set(meta) == {"ts", "v"}
+
+
+def test_early_flush_warns_with_both_rates(tmp_path):
+    """Flushing small is sometimes right -- a crawl ending, a shift boundary --
+    but the cost is real and must not be silent."""
+    from backend.collections import Dataset
+    ds = Dataset("news", str(tmp_path), time_column="ts")
+    ds.push([{"ts": 1, "v": "a"}])
+    info = ds.flush("explicit")
+    assert "warning" in info
+    assert "1.5" in info["warning"] and "36" in info["warning"]
+    assert ds.stats()["undersized_files"] == 1
+
+
+def test_size_triggered_flush_is_not_warned_about(tmp_path):
+    from backend.collections import Dataset
+    ds = Dataset("news", str(tmp_path), time_column="ts", flush_bytes=200)
+    ds.push([{"ts": i, "body": "x" * 50} for i in range(20)])
+    assert ds.stats()["files"] == 1
+    assert "warning" not in ds.files[0]
+    assert ds.files[0]["reason"] == "size"
+
+
+def test_kv_store_keeps_small_blobs_out_of_standalone_files(tmp_path):
+    """Thousands of small standalone uploads is the same 24x trap; small blobs
+    wait to be packed into one Parquet file with a BLOB column."""
+    from backend.collections import KVStore
+    kv = KVStore("shots", str(tmp_path))
+    small = kv.put("page-1.html", b"<html>" + b"x" * 1000)
+    big = kv.put("video.bin", b"y" * (9 * 1024 * 1024))
+    assert small["placement"] == "inline" and small["packed"] is False
+    assert big["placement"] == "standalone" and os.path.exists(big["path"])
+
+    packed = kv.pack()
+    assert packed["keys"] == 1
+    assert kv.locate("page-1.html")["packed"] is True
+    assert kv.locate("page-1.html")["pack_file"] == packed["path"]
+    assert kv.stats()["pending_pack"] == 0
+
+
+def test_kv_index_survives_a_restart(tmp_path):
+    """drive.file cannot browse and Drive listings are slow, so a key that could
+    only be found by scanning would be unusable from an MCP call."""
+    from backend.collections import KVStore
+    KVStore("shots", str(tmp_path)).put("a", b"1")
+    assert KVStore("shots", str(tmp_path)).locate("a")["sha256"]
+
+
+def test_request_queue_dedupes_and_survives_restart(tmp_path):
+    from backend.collections import RequestQueue
+    q = RequestQueue("crawl", str(tmp_path))
+    k1, added1 = q.add("https://x.test/a")
+    k2, added2 = q.add("https://x.test/a")
+    assert k1 == k2 and added1 is True and added2 is False
+
+    r = q.reserve()
+    assert r["state"] == "running" and r["attempts"] == 1
+    # A fresh instance must see the same position -- a 12h session cap means any
+    # real crawl outlives one session.
+    assert RequestQueue("crawl", str(tmp_path)).stats()["running"] == 1
+
+
+def test_request_queue_retries_then_gives_up(tmp_path):
+    """A transient failure should not cost the URL; a permanent one should not
+    retry forever."""
+    from backend.collections import RequestQueue
+    q = RequestQueue("crawl", str(tmp_path), max_attempts=2)
+    key, _ = q.add("https://x.test/a")
+    q.reserve(); r = q.fail(key, "timeout")
+    assert r["state"] == "pending"           # attempt 1 of 2
+    q.reserve(); r = q.fail(key, "timeout")
+    assert r["state"] == "failed"            # attempts exhausted
+    assert q.stats()["failed"] == 1
+
+
+def test_stale_running_requests_are_reclaimed(tmp_path):
+    """Whatever was in flight when a session was killed would otherwise be stuck
+    in RUNNING forever."""
+    from backend.collections import RequestQueue
+    q = RequestQueue("crawl", str(tmp_path))
+    key, _ = q.add("https://x.test/a")
+    q.reserve()
+    q.requests[key]["reserved_at"] = time.time() - 7200
+    assert q.reclaim_stale(older_than_s=3600) == 1
+    assert q.stats()["pending"] == 1
