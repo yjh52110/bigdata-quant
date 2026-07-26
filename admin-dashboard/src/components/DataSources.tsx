@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Database, HardDrive, Play, ChevronDown, ChevronRight } from 'lucide-react';
+import { Database, HardDrive, Play, ChevronDown, ChevronRight, Layers } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
 import ResponsiveTable from './ResponsiveTable';
@@ -17,9 +17,34 @@ export default function DataSources() {
   const [sql, setSql] = useState('SELECT count(*) AS n FROM s3_eth_blocks_2024_01_15');
   const [result, setResult] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [frag, setFrag] = useState<any>(null);
+  const [compacting, setCompacting] = useState(false);
+  const [compactMsg, setCompactMsg] = useState<string | null>(null);
+
+  const loadFrag = () =>
+    apiFetch('/api/storage/fragmentation').then(r => r.json()).then(setFrag).catch(console.error);
+
+  const runCompact = async (dryRun: boolean) => {
+    setCompacting(true); setCompactMsg(null);
+    try {
+      const res = await apiFetch('/api/storage/compact', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: dryRun }),
+      });
+      const d = await res.json();
+      if (!res.ok) { setCompactMsg(d.detail); return; }
+      setCompactMsg(dryRun
+        ? t('ds.compactDry', { g: d.plan.groups.length, n: d.plan.files_small })
+        : t('ds.compactDone', {
+            g: d.merged_groups, n: d.files_removed, rows: (d.rows ?? 0).toLocaleString(),
+            before: (d.bytes_before / 1048576).toFixed(1), after: (d.bytes_after / 1048576).toFixed(1) }));
+      loadFrag();
+    } catch (e) { setCompactMsg(String(e)); } finally { setCompacting(false); }
+  };
 
   useEffect(() => {
     apiFetch('/api/datasources').then(r => r.json()).then(setData).catch(console.error);
+    loadFrag();
   }, []);
 
   // Keep the SQL in step with the picker: the view name is derived, so a stale
@@ -175,6 +200,39 @@ export default function DataSources() {
           </div>
         )}
       </div>
+
+      {frag && (
+        <div className="glass-panel p-5">
+          <h3 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+            <Layers size={18} className="text-amber-400" /> {t('ds.compactTitle')}
+          </h3>
+          <p className="text-xs text-slate-500 mb-4">{t('ds.compactNote')}</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            {[
+              { l: t('ds.fragTotal'), v: frag.files_total },
+              { l: t('ds.fragSmall'), v: frag.files_small, warn: frag.files_small > 0 },
+              { l: t('ds.fragGroups'), v: frag.groups.length },
+              { l: t('ds.fragAfter'), v: frag.estimated_parts_after },
+            ].map((x, i) => (
+              <div key={i} className="bg-slate-800/40 border border-slate-700/50 rounded-lg p-3">
+                <p className="text-xs text-slate-500">{x.l}</p>
+                <p className={`text-xl font-bold ${x.warn ? 'text-amber-400' : 'text-slate-200'}`}>{x.v}</p>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => runCompact(true)} disabled={compacting}
+              className="text-sm px-4 min-h-[44px] sm:min-h-0 sm:py-2 rounded border border-slate-700 text-slate-300 disabled:opacity-40">
+              {t('ds.compactPreview')}
+            </button>
+            <button onClick={() => runCompact(false)} disabled={compacting || frag.groups.length === 0}
+              className="text-sm px-4 min-h-[44px] sm:min-h-0 sm:py-2 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 disabled:opacity-40">
+              {compacting ? t('ds.compacting') : t('ds.compactRun')}
+            </button>
+          </div>
+          {compactMsg && <p className="text-xs text-slate-300 mt-3 break-words">{compactMsg}</p>}
+        </div>
+      )}
 
       <div className="glass-panel p-5">
         <h3 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">

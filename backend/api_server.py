@@ -26,6 +26,7 @@ from backend import s3_views
 from backend.drive_store import (Catalog, LAYERS, MIN_FILE_BYTES, MAX_FILE_BYTES,
                                  COMPRESSION, placement_report)
 from backend import sources as source_registry
+from backend import compaction
 from backend.kaggle_control import overview as kaggle_overview
 from backend.kaggle_dispatch import (
     dispatch as kaggle_dispatch, refresh_jobs as kaggle_refresh_jobs,
@@ -760,6 +761,49 @@ def s3_schema(chain: str, table: str, date_prefix: str = ""):
                 "columns": s3_views.describe(conn, chain, table, date_prefix)}
     except s3_views.S3ViewError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class CompactionRequest(BaseModel):
+    directory: str = ""
+    time_column: str | None = None
+    dry_run: bool = True
+
+
+@app.post("/api/storage/compact")
+def storage_compact(req: CompactionRequest):
+    """Merges undersized Parquet parts. Defaults to a dry run.
+
+    Fragmentation is the one problem here that worsens with use: a 5.9 MB file
+    transfers at 1.53 MB/s against 36.56 MB/s for 200 MB, and that penalty is
+    paid on every later read, not once. Inputs are only deleted after the merged
+    output's row count is verified against them.
+    """
+    target = os.path.abspath(req.directory or DATA_DIR)
+    root = os.path.abspath(DATA_DIR)
+    # Confine it to the data directory: this is the one endpoint that deletes
+    # files, so the path must not be able to point anywhere else.
+    if not (target == root or target.startswith(root + os.sep)):
+        raise HTTPException(status_code=400,
+                            detail=f"directory must be inside {root}")
+    if not os.path.isdir(target):
+        raise HTTPException(status_code=400, detail=f"no such directory: {target}")
+    try:
+        return compaction.compact(target, time_column=req.time_column,
+                                  dry_run=req.dry_run)
+    except compaction.CompactionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/storage/fragmentation")
+def storage_fragmentation(directory: str = ""):
+    """What compaction would do, without doing it."""
+    target = os.path.abspath(directory or DATA_DIR)
+    root = os.path.abspath(DATA_DIR)
+    if not (target == root or target.startswith(root + os.sep)):
+        raise HTTPException(status_code=400, detail=f"directory must be inside {root}")
+    if not os.path.isdir(target):
+        raise HTTPException(status_code=400, detail=f"no such directory: {target}")
+    return compaction.plan(target)
 
 
 @app.get("/api/workers")

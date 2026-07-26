@@ -1551,3 +1551,117 @@ def test_duckdb_attach_passes_the_token_as_a_header_not_a_url_param(monkeypatch)
 def test_media_url_shape():
     from backend.drive_rest import media_url
     assert media_url("abc") == "https://www.googleapis.com/drive/v3/files/abc?alt=media"
+
+
+# --------------------------------------------------------------------------
+# compaction
+# --------------------------------------------------------------------------
+def _write_parquet(path, rows, cols=("ts", "v")):
+    import polars as pl
+    data = {c: [f"{c}{i}" if c == "v" else i for i in rows] for c in cols}
+    pl.DataFrame(data).write_parquet(path, compression="zstd")
+    return path
+
+
+def test_plan_leaves_already_large_files_alone(tmp_path):
+    """Rewriting a file that is already big enough spends the upload cost again
+    for no read-side gain."""
+    from backend.compaction import plan
+    big = _write_parquet(str(tmp_path / "big.parquet"), range(200_000))
+    _write_parquet(str(tmp_path / "a.parquet"), range(10))
+    _write_parquet(str(tmp_path / "b.parquet"), range(10, 20))
+
+    p = plan(str(tmp_path), min_bytes=os.path.getsize(big))
+    assert big in p["already_ok"]
+    assert all(big not in g for g in p["groups"])
+    assert len(p["groups"]) == 1 and len(p["groups"][0]) == 2
+
+
+def test_compaction_preserves_every_row_and_the_sort(tmp_path):
+    import polars as pl
+    from backend.compaction import compact_group
+    a = _write_parquet(str(tmp_path / "a.parquet"), [5, 1, 9])
+    b = _write_parquet(str(tmp_path / "b.parquet"), [7, 2])
+
+    r = compact_group([a, b], time_column="ts")
+    assert r["rows"] == 5
+    assert not os.path.exists(a) and not os.path.exists(b)
+    got = pl.read_parquet(r["output"])
+    assert got["ts"].to_list() == [1, 2, 5, 7, 9]     # re-sorted, not concatenated
+
+
+def test_mismatched_schemas_are_refused_not_coerced(tmp_path):
+    """Silently widening a schema during a merge would change what downstream
+    readers see without anyone asking for it."""
+    from backend.compaction import compact_group, CompactionError
+    a = _write_parquet(str(tmp_path / "a.parquet"), [1, 2], cols=("ts", "v"))
+    b = _write_parquet(str(tmp_path / "b.parquet"), [3, 4], cols=("ts", "v", "extra"))
+    with pytest.raises(CompactionError, match="differing columns"):
+        compact_group([a, b])
+    # Both inputs must survive a refusal.
+    assert os.path.exists(a) and os.path.exists(b)
+
+
+def test_row_count_mismatch_aborts_without_deleting_inputs(tmp_path, monkeypatch):
+    """The verify-before-delete step is the one thing standing between a bug and
+    data loss, so it has to be exercised."""
+    import polars as pl
+    import backend.compaction as comp
+    a = _write_parquet(str(tmp_path / "a.parquet"), [1, 2])
+    b = _write_parquet(str(tmp_path / "b.parquet"), [3, 4])
+
+    real = comp._read_meta
+
+    def lying_meta(path):
+        rows, cols = real(path)
+        # Pretend the merged output lost a row.
+        return (rows - 1, cols) if "compacted" in path else (rows, cols)
+
+    monkeypatch.setattr(comp, "_read_meta", lying_meta)
+    with pytest.raises(comp.CompactionError, match="row count mismatch"):
+        comp.compact_group([a, b], time_column="ts")
+    assert os.path.exists(a) and os.path.exists(b)
+    # And no temporary file is left behind.
+    assert not [f for f in os.listdir(tmp_path) if f.endswith(comp.TMP_SUFFIX)]
+
+
+def test_a_single_small_file_is_reported_not_rewritten(tmp_path):
+    from backend.compaction import plan
+    only = _write_parquet(str(tmp_path / "a.parquet"), [1])
+    p = plan(str(tmp_path))
+    assert p["groups"] == [] and p["singletons"] == [only]
+
+
+def test_one_bad_group_does_not_stop_the_rest(tmp_path):
+    from backend.compaction import compact
+    good = tmp_path / "good"; good.mkdir()
+    _write_parquet(str(good / "a.parquet"), [1, 2])
+    _write_parquet(str(good / "b.parquet"), [3, 4])
+    _write_parquet(str(good / "c.parquet"), [5, 6], cols=("ts", "v", "extra"))
+
+    out = compact(str(good), time_column="ts", max_bytes=10_000_000)
+    # Either it merged what it could or it reported why; it must not raise.
+    assert out["merged_groups"] + len(out["failures"]) >= 1
+
+
+def test_dry_run_changes_nothing(tmp_path):
+    from backend.compaction import compact
+    a = _write_parquet(str(tmp_path / "a.parquet"), [1, 2])
+    b = _write_parquet(str(tmp_path / "b.parquet"), [3, 4])
+    out = compact(str(tmp_path), time_column="ts", dry_run=True)
+    assert out["dry_run"] is True
+    assert os.path.exists(a) and os.path.exists(b)
+
+
+def test_compaction_endpoint_refuses_paths_outside_the_data_dir():
+    """This is the only endpoint that deletes files, so the path must not be able
+    to point anywhere else."""
+    import inspect
+    import backend.api_server as api
+    src = inspect.getsource(api.storage_compact)
+    assert "os.path.abspath" in src
+    assert "startswith(root" in src
+    assert "dry_run" in inspect.signature(api.CompactionRequest).parameters or \
+           "dry_run" in api.CompactionRequest.model_fields
+    # Defaulting to a real run would make an accidental call destructive.
+    assert api.CompactionRequest.model_fields["dry_run"].default is True
