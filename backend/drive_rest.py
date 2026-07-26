@@ -130,29 +130,79 @@ def about(token: str) -> Dict[str, Any]:
     return _json_request(f"{API}/about?fields=user,storageQuota", headers=_auth(token))
 
 
-def find_folder(token: str, name: str, parent: Optional[str] = None) -> Optional[str]:
+def find_folders(token: str, name: str, parent: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Every folder with this name. Plural on purpose -- Drive allows duplicates.
+
+    Verified 2026-07-26 against a live account: creating the same folder name
+    twice under one parent yields two distinct ids, and a name query returns
+    both. A filesystem would have refused the second.
+    """
     # Escape single quotes: an unescaped name would break the query syntax.
     safe = name.replace("\\", "\\\\").replace("'", "\\'")
     q = f"name='{safe}' and mimeType='{FOLDER_MIME}' and trashed=false"
     if parent:
         q += f" and '{parent}' in parents"
-    url = f"{API}/files?q={urllib.parse.quote(q)}&fields=files(id,name)&pageSize=10"
+    url = (f"{API}/files?q={urllib.parse.quote(q)}"
+           f"&fields=files(id,name,createdTime)&pageSize=100&orderBy=createdTime")
     out = _json_request(url, headers=_auth(token))
-    files = (out or {}).get("files") or []
-    return files[0]["id"] if files else None
+    return (out or {}).get("files") or []
+
+
+def find_folder(token: str, name: str, parent: Optional[str] = None) -> Optional[str]:
+    """One folder id, chosen deterministically when duplicates exist.
+
+    Two writers racing on ensure_folder each see nothing and each create one, so
+    duplicates do happen. Picking the lowest id means every writer converges on
+    the same folder afterwards instead of splitting the dataset in half -- which
+    is worse than the duplicate itself, because half the files become invisible
+    to whoever holds the other id.
+    """
+    folders = find_folders(token, name, parent)
+    if not folders:
+        return None
+    return min(f["id"] for f in folders)
 
 
 def ensure_folder(token: str, name: str, parent: Optional[str] = None) -> str:
+    """Find-or-create, then re-check.
+
+    Drive has no conditional create, so this cannot be made atomic. What it can
+    do is converge: after creating, look again and return the same deterministic
+    winner every caller would pick. A loser's folder is left in place -- deleting
+    it could race with a write already going into it -- and duplicate_folders()
+    reports it for later cleanup.
+    """
     existing = find_folder(token, name, parent)
     if existing:
         return existing
     meta: Dict[str, Any] = {"name": name, "mimeType": FOLDER_MIME}
     if parent:
         meta["parents"] = [parent]
-    out = _json_request(f"{API}/files?fields=id", method="POST",
-                        data=json.dumps(meta).encode(),
-                        headers={**_auth(token), "Content-Type": "application/json"})
-    return out["id"]
+    _json_request(f"{API}/files?fields=id", method="POST",
+                  data=json.dumps(meta).encode(),
+                  headers={**_auth(token), "Content-Type": "application/json"})
+    # Deliberately ignore the id just created: another writer may have created
+    # one too, and both must agree on which to use.
+    winner = find_folder(token, name, parent)
+    if winner is None:
+        raise DriveError(f"created folder {name!r} but it is not visible")
+    return winner
+
+
+def duplicate_folders(token: str, path: str) -> List[Dict[str, Any]]:
+    """Folders along a path that exist more than once, i.e. losers of a race."""
+    dupes = []
+    parent = None
+    for part in [p for p in path.split("/") if p]:
+        found = find_folders(token, part, parent)
+        if len(found) > 1:
+            keep = min(f["id"] for f in found)
+            dupes.append({"name": part, "parent": parent, "keep": keep,
+                          "extra": [f["id"] for f in found if f["id"] != keep]})
+        if not found:
+            break
+        parent = min(f["id"] for f in found)
+    return dupes
 
 
 def ensure_path(token: str, path: str) -> str:

@@ -30,6 +30,7 @@ Numbers behind the rules, all measured in this project:
                             what exists by browsing
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -186,7 +187,8 @@ class PlacementError(RuntimeError):
 
 def choose_account(accounts: List[Dict[str, Any]], *, domain: Optional[str] = None,
                    need_bytes: int = 0,
-                   existing: Optional[str] = None) -> str:
+                   existing: Optional[str] = None,
+                   writer: Optional[str] = None) -> str:
     """Which account should hold this dataset.
 
     accounts is what GoogleAccountManager.get_all_quotas() returns.
@@ -214,7 +216,19 @@ def choose_account(accounts: List[Dict[str, Any]], *, domain: Optional[str] = No
     pinned = DOMAIN_PINS.get(domain or "")
     if pinned and any(a["account_index"] == pinned for a in usable):
         return pinned
-    return max(usable, key=lambda a: a.get("free", 0))["account_index"]
+
+    ranked = sorted(usable, key=lambda a: (-a.get("free", 0), a["account_index"]))
+    if writer and len(ranked) > 1:
+        # Concurrent writers all see the same "most free" account and would all
+        # pile onto it, overfilling one while the rest sit idle -- and Drive's
+        # 750 GB/day cap is per account, so that also serialises what could have
+        # run in parallel. Offsetting by a hash of the writer id spreads them
+        # deterministically, with no coordination and no shared lock.
+        offset = int(hashlib.sha256(writer.encode()).hexdigest(), 16) % len(ranked)
+        # Only among accounts that can actually hold it, so the spread never
+        # picks somewhere too full.
+        return ranked[offset]["account_index"]
+    return ranked[0]["account_index"]
 
 
 def placement_report(accounts: List[Dict[str, Any]],
@@ -255,6 +269,22 @@ def placement_report(accounts: List[Dict[str, Any]],
     }
 
 
+# Concurrency, and why the catalog is sharded rather than locked.
+#
+# Several Kaggle or Colab sessions can be writing at once, and Drive offers no
+# lock and no conditional write, so read-modify-write on one shared file loses
+# entries: two writers both read, both append, and the second save erases the
+# first's work. Each writer therefore owns one shard file and never touches
+# another's; a reader merges them. No coordination is needed because no two
+# writers ever write the same bytes.
+#
+# The merge rule for a dataset seen in several shards is last-write-wins on
+# updated_at, with counts summed, because shards describe disjoint partitions of
+# the same dataset -- one session doing January and another doing February both
+# legitimately contribute rows.
+DEFAULT_SHARD = "local"
+
+
 class Catalog:
     """What exists, where, and how big -- without listing Drive.
 
@@ -264,28 +294,112 @@ class Catalog:
     an MCP call's latency.
     """
 
-    def __init__(self, path: str = LOCAL_CATALOG):
+    def __init__(self, path: str = LOCAL_CATALOG, shard: str = DEFAULT_SHARD):
         self.path = path
+        self.shard = shard
         self.entries: Dict[str, Dict[str, Any]] = {}
         self.load()
 
+    @property
+    def shard_dir(self) -> str:
+        return os.path.join(os.path.dirname(self.path), "shards")
+
+    def shard_path(self, shard: Optional[str] = None) -> str:
+        return os.path.join(self.shard_dir, f"{shard or self.shard}.json")
+
+    def _any_shard_exists(self) -> bool:
+        return os.path.isdir(self.shard_dir) and any(
+            f.endswith(".json") for f in os.listdir(self.shard_dir))
+
+    @staticmethod
+    def merge(entries_lists: List[List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+        """Combines shards. Counts add; descriptive fields follow the newest."""
+        out: Dict[str, Dict[str, Any]] = {}
+        for entries in entries_lists:
+            for e in entries:
+                name = e.get("dataset")
+                if not name:
+                    continue
+                cur = out.get(name)
+                if cur is None:
+                    out[name] = dict(e)
+                    continue
+                merged = dict(cur if cur.get("updated_at", 0) >= e.get("updated_at", 0) else e)
+                for k in ("rows", "bytes", "files"):
+                    merged[k] = (cur.get(k) or 0) + (e.get(k) or 0)
+                for k, better in (("time_min", min), ("time_max", max)):
+                    vals = [v for v in (cur.get(k), e.get(k)) if v]
+                    merged[k] = better(vals) if vals else None
+                # Placement must not flip-flop between shards: the earliest
+                # recorded account wins, matching upsert's no-relocation rule.
+                first = cur if cur.get("updated_at", 0) <= e.get("updated_at", 0) else e
+                merged["account"] = first.get("account") or merged.get("account")
+                out[name] = merged
+        return out
+
+    def load_all_shards(self) -> Dict[str, Dict[str, Any]]:
+        """Everything every writer has recorded."""
+        lists = []
+        own = f"{self.shard}.json"
+        if os.path.isdir(self.shard_dir):
+            for fn in sorted(os.listdir(self.shard_dir)):
+                # Skip our own file: the in-memory copy below supersedes it, and
+                # counting both would double every row this writer contributed.
+                if not fn.endswith(".json") or fn == own:
+                    continue
+                try:
+                    with open(os.path.join(self.shard_dir, fn)) as f:
+                        lists.append(json.load(f).get("datasets", []))
+                except (OSError, json.JSONDecodeError):
+                    logging.warning(f"skipping unreadable catalog shard {fn}")
+        lists.append(list(self.entries.values()))
+        return self.merge(lists)
+
     def load(self) -> None:
+        """Loads this writer's own entries.
+
+        The shard file is this writer's authority; the main file is a merged
+        snapshot written for backup and single-file reads. Reading the main file
+        back into entries would count every other writer's rows as our own --
+        which is exactly what it did until a test caught a third reader seeing
+        200 rows where the two writers each saw 150.
+
+        The main file is still read once, when no shard exists yet, so an
+        install that predates sharding keeps its catalog.
+        """
+        if os.path.exists(self.shard_path()):
+            source = self.shard_path()
+        elif self._any_shard_exists():
+            # Other writers exist, so this is a new writer, not a pre-sharding
+            # install. Starting from the merged file would claim their rows as
+            # ours and double them on the next merge.
+            self.entries = {}
+            return
+        else:
+            source = self.path
         try:
-            with open(self.path) as f:
+            with open(source) as f:
                 data = json.load(f)
             self.entries = {e["dataset"]: e for e in data.get("datasets", [])}
         except (OSError, json.JSONDecodeError, KeyError, TypeError):
             self.entries = {}
 
-    def save(self) -> None:
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        tmp = self.path + ".part"
+    def _write(self, target: str, datasets: List[Dict[str, Any]], shard: Optional[str]) -> None:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        tmp = target + ".part"
         with open(tmp, "w") as f:
-            json.dump({"updated_at": time.time(),
-                       "datasets": sorted(self.entries.values(), key=lambda e: e["dataset"])},
+            json.dump({"updated_at": time.time(), "shard": shard,
+                       "datasets": sorted(datasets, key=lambda e: e["dataset"])},
                       f, indent=2, ensure_ascii=False)
         # Atomic: a truncated catalog would make every dataset look missing.
-        os.replace(tmp, self.path)
+        os.replace(tmp, target)
+
+    def save(self) -> None:
+        # Our shard holds only our own work; the main file holds the merged view,
+        # so a single-file read or a backup sees everything without needing the
+        # shard directory.
+        self._write(self.shard_path(), list(self.entries.values()), self.shard)
+        self._write(self.path, list(self.load_all_shards().values()), None)
 
     def upsert(self, *, layer: str, partition_keys: Dict[str, str],
                rows: int = 0, bytes_: int = 0, files: int = 0,

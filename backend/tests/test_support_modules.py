@@ -1882,7 +1882,10 @@ def test_catalog_backup_round_trip(tmp_path):
                rows=10, bytes_=100)
     cat.backup_to_drive(drive, "tok")
 
-    os.remove(cat.path)
+    # Losing the catalog means losing the directory, not one file: the shard
+    # holds the same entries.
+    import shutil
+    shutil.rmtree(os.path.dirname(cat.path))
     fresh = Catalog(str(tmp_path / "datasets.json"))
     assert fresh.list() == []
     fresh.restore_from_drive(drive, "tok")
@@ -1925,3 +1928,127 @@ def test_backup_of_a_missing_catalog_is_an_error(tmp_path):
     cat = Catalog(str(tmp_path / "nope.json"))
     with pytest.raises(StoreError, match="does not exist"):
         cat.backup_to_drive(_FakeDrive(), "tok")
+
+
+# --------------------------------------------------------------------------
+# Concurrency across several Drive accounts
+# --------------------------------------------------------------------------
+def test_folder_lookup_is_deterministic_when_duplicates_exist(monkeypatch):
+    """Verified against a live account: Drive permits two folders with the same
+    name under one parent, so a find-then-create race really does produce them.
+    Every writer must then converge on the same one, or the dataset splits in
+    half and each holder sees only its own files."""
+    import backend.drive_rest as dr
+    monkeypatch.setattr(dr, "find_folders", lambda t, n, p=None: [
+        {"id": "zzz", "name": n}, {"id": "aaa", "name": n}, {"id": "mmm", "name": n}])
+    assert dr.find_folder("tok", "x") == "aaa"
+    # Order returned by the API must not change the answer.
+    monkeypatch.setattr(dr, "find_folders", lambda t, n, p=None: [
+        {"id": "aaa", "name": n}, {"id": "zzz", "name": n}, {"id": "mmm", "name": n}])
+    assert dr.find_folder("tok", "x") == "aaa"
+
+
+def test_ensure_folder_rechecks_after_creating(monkeypatch):
+    """The id just created may not be the one everyone else will use."""
+    import backend.drive_rest as dr
+    state = {"created": False}
+    monkeypatch.setattr(dr, "find_folders", lambda t, n, p=None:
+                        [{"id": "aaa"}, {"id": "bbb"}] if state["created"] else [])
+    def fake_json(url, **kw):
+        state["created"] = True
+        return {"id": "bbb"}          # our own creation loses the tie-break
+    monkeypatch.setattr(dr, "_json_request", fake_json)
+    assert dr.ensure_folder("tok", "x") == "aaa"
+
+
+def test_concurrent_writers_do_not_lose_each_others_entries(tmp_path):
+    """Read-modify-write on one shared file loses entries: both writers read,
+    both append, the second save erases the first's work."""
+    from backend.drive_store import Catalog, L2
+    path = str(tmp_path / "datasets.json")
+    a = Catalog(path, shard="s1")
+    b = Catalog(path, shard="s2")
+    a.upsert(layer=L2, partition_keys={"name": "f"}, rows=100, bytes_=1000,
+             account="acc-01", time_min="2024-01", time_max="2024-01")
+    b.upsert(layer=L2, partition_keys={"name": "f"}, rows=50, bytes_=500,
+             account="acc-02", time_min="2023-12", time_max="2024-02")
+
+    merged = a.load_all_shards()["features_f"]
+    assert merged["rows"] == 150 and merged["bytes"] == 1500
+    assert merged["time_min"] == "2023-12" and merged["time_max"] == "2024-02"
+    # Placement must not flip between shards.
+    assert merged["account"] == "acc-01"
+
+
+def test_an_unreadable_shard_does_not_hide_the_others(tmp_path):
+    from backend.drive_store import Catalog, L2
+    path = str(tmp_path / "datasets.json")
+    a = Catalog(path, shard="good")
+    a.upsert(layer=L2, partition_keys={"name": "f"}, rows=1)
+    (tmp_path / "shards" / "broken.json").write_text("{not json")
+    assert "features_f" in Catalog(path, shard="good").load_all_shards()
+
+
+def test_concurrent_writers_spread_across_accounts():
+    """All writers see the same "most free" account and would pile onto it,
+    overfilling one while the rest idle -- and the 750 GB/day cap is per account,
+    so that also serialises what could have run in parallel."""
+    from backend.drive_store import choose_account
+    tb = 1024 ** 4
+    accs = [{"account_index": f"acc-{i}", "is_connected": True,
+             "used": int(0.5 * tb), "limit": int(5 * tb), "free": int(4.5 * tb)}
+            for i in range(4)]
+    picks = {choose_account(accs, writer=f"w{i}") for i in range(8)}
+    assert len(picks) > 1
+
+    # Deterministic: the same writer always lands in the same place, so a
+    # restarted session keeps writing where it was.
+    assert choose_account(accs, writer="w1") == choose_account(accs, writer="w1")
+    # And a single writer still gets the emptiest account.
+    assert choose_account(accs) == "acc-0"
+
+
+def test_spreading_never_picks_an_account_without_room():
+    from backend.drive_store import choose_account
+    tb = 1024 ** 4
+    accs = [
+        {"account_index": "full", "is_connected": True, "used": int(4.95 * tb),
+         "limit": int(5 * tb), "free": int(0.05 * tb)},
+        {"account_index": "roomy", "is_connected": True, "used": int(1 * tb),
+         "limit": int(5 * tb), "free": int(4 * tb)},
+    ]
+    for i in range(10):
+        assert choose_account(accs, writer=f"w{i}",
+                              need_bytes=int(0.5 * tb)) == "roomy"
+
+
+def test_every_reader_agrees_on_the_merged_total(tmp_path):
+    """The bug this pins: the main file was both an input and an output, so a
+    reader that loaded it and then merged the shards counted the same rows twice.
+    Two writers each saw 150 while a third saw 200, then 300."""
+    from backend.drive_store import Catalog, L2
+    import json as _json
+    path = str(tmp_path / "datasets.json")
+    a = Catalog(path, shard="s1")
+    b = Catalog(path, shard="s2")
+    a.upsert(layer=L2, partition_keys={"name": "f"}, rows=100, account="acc-01")
+    b.upsert(layer=L2, partition_keys={"name": "f"}, rows=50, account="acc-02")
+
+    views = [
+        a.load_all_shards()["features_f"]["rows"],
+        b.load_all_shards()["features_f"]["rows"],
+        Catalog(path, shard="s3").load_all_shards()["features_f"]["rows"],
+        _json.load(open(path))["datasets"][0]["rows"],
+    ]
+    assert views == [150, 150, 150, 150], views
+
+
+def test_a_pre_sharding_catalog_is_not_lost(tmp_path):
+    """An install that predates sharding has entries only in the main file."""
+    import json as _json
+    from backend.drive_store import Catalog
+    path = tmp_path / "datasets.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(_json.dumps({"datasets": [
+        {"dataset": "old_one", "layer": "L2_features", "rows": 7, "updated_at": 1}]}))
+    assert Catalog(str(path)).get("old_one")["rows"] == 7
