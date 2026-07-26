@@ -27,6 +27,7 @@ from backend.drive_store import (Catalog, LAYERS, MIN_FILE_BYTES, MAX_FILE_BYTES
                                  COMPRESSION, placement_report)
 from backend import sources as source_registry
 from backend import compaction
+from backend import scheduler
 from backend.kaggle_control import overview as kaggle_overview
 from backend.kaggle_dispatch import (
     dispatch as kaggle_dispatch, refresh_jobs as kaggle_refresh_jobs,
@@ -827,6 +828,47 @@ def catalog_backup():
         return {"account": index, **Catalog().backup_to_drive(drive_rest, token)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)[:300])
+
+
+class PlanRequest(BaseModel):
+    total_bytes: int
+    max_parallelism: int | None = None
+
+
+@app.post("/api/scheduler/plan")
+def scheduler_plan(req: PlanRequest):
+    """How much parallelism a job of this size should get, and what limits it.
+
+    Every constant behind this was measured on the real platforms: Colab caps at
+    3 sessions, Kaggle ran 5 without queueing, uploads sit near 36 MB/s per
+    session regardless of platform, and the per-account 750 GB/day allowance --
+    not throughput -- is what bounds anything large.
+    """
+    try:
+        plan = scheduler.plan_job(req.total_bytes,
+                                  accounts=account_manager.get_all_quotas(),
+                                  max_parallelism=req.max_parallelism)
+    except scheduler.SchedulerError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return plan.as_dict()
+
+
+@app.get("/api/scheduler/limits")
+def scheduler_limits():
+    """The measured ceilings, so the dashboard shows numbers rather than guesses."""
+    return {
+        "platforms": scheduler.PLATFORMS,
+        "daily_upload_bytes_per_account": scheduler.DAILY_UPLOAD_BYTES,
+        "concurrency_efficiency": round(scheduler.CONCURRENCY_EFFICIENCY, 4),
+        "download": {
+            "optimum_parts": scheduler.DOWNLOAD_PARTS_OPTIMUM,
+            "rates_mb_s": scheduler.DOWNLOAD_RATES_MB_S,
+            "note": ("云盘分段下载实测：2 路 119.3 MB/s 为峰值，4/8/16 路反而降到 "
+                     "112/107/98——连接更多是互相抢带宽。此最优值属于机房链路，"
+                     "同样的测试在家宽上峰值在 8 路且只有 1.6 倍。"),
+        },
+        "min_shard_bytes": scheduler.MIN_SHARD_BYTES,
+    }
 
 
 @app.get("/api/workers")

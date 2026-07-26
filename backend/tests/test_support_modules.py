@@ -2116,3 +2116,101 @@ def test_queue_worker_index_is_validated(tmp_path):
     from backend.collections import RequestQueue, CollectionError
     with pytest.raises(CollectionError, match="outside"):
         RequestQueue("crawl", str(tmp_path), worker=5, workers=3)
+
+
+# --------------------------------------------------------------------------
+# scheduler: dynamic parallelism
+# --------------------------------------------------------------------------
+def _accounts(n, used_tb=0.0):
+    tb = 1024 ** 4
+    return [{"account_index": f"acc-{i:02d}", "is_connected": True,
+             "used": int(used_tb * tb), "limit": int(5 * tb),
+             "free": int((5 - used_tb) * tb)} for i in range(n)]
+
+
+def test_small_jobs_are_not_split():
+    """At ~32 MB/s and ~30s of startup, a 200 MB job spends most of its life
+    starting up; every shard pays that 30s in parallel, so splitting cannot
+    shorten it."""
+    from backend.scheduler import plan_job
+    p = plan_job(200 * 1024 ** 2, accounts=_accounts(15))
+    assert p.slots and len(p.slots) == 1
+    assert p.limited_by == "job_too_small_to_split"
+    assert any("startup" in w for w in p.warnings)
+
+
+def test_colab_session_cap_is_enforced_as_exact():
+    """A fourth Colab session is refused outright with Precondition Failed, so
+    asking for more is a caller error rather than something to clamp silently."""
+    from backend.scheduler import plan_job, SchedulerError, COLAB
+    with pytest.raises(SchedulerError, match="at most 3"):
+        plan_job(100 * 1024 ** 3, accounts=_accounts(9), platforms={COLAB: 4})
+
+
+def test_kaggle_cap_is_treated_as_a_floor_not_a_ceiling():
+    """5 concurrent ran with no queueing and the real limit was never reached, so
+    the number must not be presented as exact."""
+    from backend.scheduler import PLATFORMS, KAGGLE, COLAB
+    assert PLATFORMS[KAGGLE]["limit_is_exact"] is False
+    assert PLATFORMS[COLAB]["limit_is_exact"] is True
+
+
+def test_parallelism_is_capped_by_available_accounts():
+    """Sessions sharing one account would serialise on its 750 GB/day allowance,
+    so there is no point running more sessions than accounts."""
+    from backend.scheduler import plan_job
+    p = plan_job(10 * 1024 ** 4, accounts=_accounts(2))
+    assert len(p.slots) == 2 and p.limited_by == "drive_accounts"
+    assert len({s.account for s in p.slots}) == 2
+
+
+def test_exhausted_daily_allowance_is_refused_with_the_reason():
+    from backend.scheduler import plan_job, SchedulerError, DAILY_UPLOAD_BYTES
+    accs = _accounts(2)
+    used = {a["account_index"]: DAILY_UPLOAD_BYTES for a in accs}
+    with pytest.raises(SchedulerError, match="daily upload allowance"):
+        plan_job(1024 ** 3, accounts=accs, used_today=used)
+
+
+def test_big_job_reports_days_not_just_transfer_time():
+    """Throughput says 32 TB takes ~37 hours; the per-account daily cap says it
+    takes days. Reporting only the first would be misleading."""
+    from backend.scheduler import plan_job
+    p = plan_job(32 * 1024 ** 4, accounts=_accounts(8))
+    assert p.est_days > 1
+    assert any("exceeds today's remaining allowance" in w for w in p.warnings)
+    assert any("More accounts shorten this" in w for w in p.warnings)
+
+
+def test_download_width_uses_the_measured_optimum_not_max_threads():
+    """Measured inside Kaggle: 2 ranges peak at 119.3 MB/s and it declines from
+    there -- 112 at 4, 107 at 8, 98 at 16. More connections contend."""
+    from backend.scheduler import (download_parts_for, DOWNLOAD_PARTS_OPTIMUM,
+                                   DOWNLOAD_RATES_MB_S)
+    assert DOWNLOAD_PARTS_OPTIMUM == 2
+    assert DOWNLOAD_RATES_MB_S[2] > DOWNLOAD_RATES_MB_S[1]
+    assert DOWNLOAD_RATES_MB_S[2] > DOWNLOAD_RATES_MB_S[16]
+    assert download_parts_for(500 * 1024 ** 2) == 2
+    # A small file just pays extra round trips.
+    assert download_parts_for(1024 ** 2) == 1
+
+
+def test_split_ranges_tiles_the_file_exactly():
+    """A gap silently truncates and an overlap silently duplicates; neither shows
+    up as an error."""
+    from backend.scheduler import split_ranges
+    for total, parts in [(1000, 3), (200 * 1024 ** 2, 2), (7, 7), (10, 1)]:
+        rs = split_ranges(total, parts)
+        assert rs[0]["start"] == 0 and rs[-1]["end"] == total - 1
+        assert sum(r["bytes"] for r in rs) == total
+        for a, b in zip(rs, rs[1:]):
+            assert b["start"] == a["end"] + 1
+
+
+def test_aggregate_rate_applies_the_measured_penalty_once():
+    from backend.scheduler import aggregate_rate_mb_s, KAGGLE, PLATFORMS
+    solo = aggregate_rate_mb_s({KAGGLE: 1})
+    assert abs(solo - PLATFORMS[KAGGLE]["upload_mb_s"]) < 1e-6
+    five = aggregate_rate_mb_s({KAGGLE: 5})
+    assert five > solo * 4          # scales
+    assert five < solo * 5          # but not perfectly

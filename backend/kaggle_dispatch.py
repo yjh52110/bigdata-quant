@@ -220,14 +220,34 @@ elif kind == "downloadbench":
     name = PARAMS.get("file_name", "bench_200mb.bin")
     folder = PARAMS.get("drive_folder", "chainquant")
     try:
-        fid = drive_rest.ensure_path(tok, f"{folder}/uploadbench")
+        fid = drive_rest.ensure_path(tok, f"{folder}/{PARAMS.get('subfolder','uploadbench')}")
         found = drive_rest.find_file(tok, name, fid)
         if not found:
-            result["error"] = f"{name} not found under {folder}/uploadbench"
+            result["error"] = f"{name} not found under {folder}"
         else:
+            size = int(found.get("size") or 0)
+            # Sequential baseline, then a parallel ranged fetch. Measured on the
+            # operator's home line the split gave only 1.6x because the pipe
+            # itself was the limit at 1.8 MB/s; on a datacenter link the answer
+            # could be entirely different, which is why this runs here.
             r = drive_rest.download(tok, found["id"], os.path.join(OUT, "readback.bin"))
             result["download_from_drive"] = r
             os.remove(os.path.join(OUT, "readback.bin"))
+
+            from concurrent.futures import ThreadPoolExecutor
+            parallel = {}
+            for n in PARAMS.get("parts_list", [2, 4, 8, 16]):
+                step = size // n
+                ranges = [(i*step, size-1 if i == n-1 else (i+1)*step-1) for i in range(n)]
+                t0 = time.time()
+                with ThreadPoolExecutor(max_workers=n) as ex:
+                    got = sum(ex.map(lambda ab: len(drive_rest.read_range(tok, found["id"], *ab)),
+                                     ranges))
+                el = max(1e-6, time.time() - t0)
+                parallel[str(n)] = {"seconds": round(el, 2),
+                                    "mb_per_s": round(got/1024**2/el, 2),
+                                    "bytes": got}
+            result["parallel_download"] = parallel
     except Exception as e:
         result["error"] = str(e)[:300]
 
