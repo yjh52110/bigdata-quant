@@ -806,6 +806,29 @@ def storage_fragmentation(directory: str = ""):
     return compaction.plan(target)
 
 
+@app.post("/api/storage/catalog/backup")
+def catalog_backup():
+    """Copies the catalog to Drive, beside the data it describes.
+
+    Paths are self-describing so most of the catalog could be rebuilt by walking
+    Drive -- but which account holds a dataset exists nowhere else, and
+    recovering that would mean searching every connected account.
+    """
+    from backend import drive_rest
+    accounts = [a for a in account_manager.get_all_quotas() if a.get("is_connected")]
+    if not accounts:
+        raise HTTPException(status_code=400, detail="no connected Google account")
+    index = accounts[0]["account_index"]
+    try:
+        token = account_manager.access_token_for(index)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"could not get a token: {str(e)[:200]}")
+    try:
+        return {"account": index, **Catalog().backup_to_drive(drive_rest, token)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)[:300])
+
+
 @app.get("/api/workers")
 def get_workers():
     return {"workers": list_workers(), "stats": queue_stats()}

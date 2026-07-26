@@ -137,6 +137,23 @@ class GoogleAccountManager:
         )
         return build("drive", "v3", credentials=creds)
 
+    def access_token_for(self, account_index: str) -> str:
+        """Short-lived Drive access token for one account.
+
+        Kept here so callers never handle the stored refresh token themselves.
+        """
+        account = self.accounts.get(account_index)
+        if not account:
+            raise ValueError(f"unknown account {account_index!r}")
+        if not account.get("refresh_token"):
+            raise ValueError(f"account {account_index!r} has no refresh token")
+        from backend import drive_rest
+        with open(CREDENTIALS_FILE) as f:
+            block = json.load(f)
+        block = block.get("web") or block.get("installed")
+        return drive_rest.access_token(block["client_id"], block["client_secret"],
+                                       self._decrypt(account["refresh_token"]))
+
     def get_storage_quota(self, account_index: str) -> dict:
         account = self.accounts.get(account_index)
         if not account or not account.get("is_connected"):

@@ -62,3 +62,7 @@ backend/data/chain/
 # GitHub rejects outright (100 MB limit).
 backend/data/kaggle_output/
 backend/data/kaggle_jobs.json
+
+# Catalog: holds Drive folder ids and per-account placement. Not a credential,
+# but it describes private storage layout and is machine-specific state, not source.
+backend/data/_catalog/

@@ -327,6 +327,44 @@ class Catalog:
         self.save()
         return entry
 
+    # ----------------------------------------------------------------------
+    # Backup
+    # ----------------------------------------------------------------------
+    # The catalog is small (about 1 KB per dataset) and irreplaceable in one
+    # respect: paths are self-describing, so most of it could be rebuilt by
+    # walking Drive -- but which account holds a dataset exists nowhere else, and
+    # recovering it would mean searching every connected account. Keeping a copy
+    # beside the data costs nothing and removes that scenario.
+    def backup_to_drive(self, drive_rest, token: str) -> Dict[str, Any]:
+        """Uploads the catalog next to the data it describes."""
+        if not os.path.exists(self.path):
+            raise StoreError("nothing to back up: catalog file does not exist")
+        folder = drive_rest.ensure_path(token, f"{DRIVE_ROOT}/{CATALOG_DIR}")
+        # Overwrite rather than accumulate: an old catalog is worse than none,
+        # because it would confidently point at datasets that have moved.
+        existing = drive_rest.find_file(token, CATALOG_FILE, folder)
+        info = drive_rest.upload(token, self.path, folder, name=CATALOG_FILE)
+        return {"uploaded": info, "replaced": bool(existing), "folder_id": folder,
+                "datasets": len(self.entries)}
+
+    def restore_from_drive(self, drive_rest, token: str, *,
+                           overwrite: bool = False) -> Dict[str, Any]:
+        """Pulls the catalog back. Refuses to clobber a local one unless asked.
+
+        Overwriting by default would turn a stale backup into data loss on any
+        machine that happened to be ahead.
+        """
+        if os.path.exists(self.path) and not overwrite:
+            return {"restored": False, "reason": "local catalog exists; pass overwrite=True"}
+        folder = drive_rest.ensure_path(token, f"{DRIVE_ROOT}/{CATALOG_DIR}")
+        found = drive_rest.find_file(token, CATALOG_FILE, folder)
+        if not found:
+            return {"restored": False, "reason": "no catalog on Drive"}
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        drive_rest.download(token, found["id"], self.path)
+        self.load()
+        return {"restored": True, "datasets": len(self.entries)}
+
     def get(self, dataset: str) -> Optional[Dict[str, Any]]:
         return self.entries.get(dataset)
 

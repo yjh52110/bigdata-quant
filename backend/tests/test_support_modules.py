@@ -1842,3 +1842,86 @@ def test_strategy_is_rejected_on_non_poll_sources():
     with pytest.raises(SourceError, match="only applies to poll"):
         Source(name="x", domain="market", mode=BATCH, fetch=lambda: None,
                partition_keys=["domain"], time_column="ts", strategy=PUMP)
+
+
+# --------------------------------------------------------------------------
+# Catalog backup
+# --------------------------------------------------------------------------
+class _FakeDrive:
+    def __init__(self):
+        self.files = {}
+        self.folders = {}
+
+    def ensure_path(self, token, path):
+        self.folders.setdefault(path, f"folder-{len(self.folders)}")
+        return self.folders[path]
+
+    def find_file(self, token, name, parent=None):
+        key = (parent, name)
+        return {"id": key} if key in self.files else None
+
+    def upload(self, token, local_path, parent_id, name=None):
+        name = name or os.path.basename(local_path)
+        with open(local_path, "rb") as f:
+            self.files[(parent_id, name)] = f.read()
+        return {"id": (parent_id, name), "bytes": len(self.files[(parent_id, name)])}
+
+    def download(self, token, file_id, dest_path):
+        with open(dest_path, "wb") as f:
+            f.write(self.files[file_id])
+        return {"bytes": len(self.files[file_id])}
+
+
+def test_catalog_backup_round_trip(tmp_path):
+    """Which account holds a dataset exists nowhere but the catalog; losing it
+    would mean searching every connected account to find out."""
+    from backend.drive_store import Catalog, L2
+    drive = _FakeDrive()
+    cat = Catalog(str(tmp_path / "datasets.json"))
+    cat.upsert(layer=L2, partition_keys={"name": "f"}, account="acc-02",
+               rows=10, bytes_=100)
+    cat.backup_to_drive(drive, "tok")
+
+    os.remove(cat.path)
+    fresh = Catalog(str(tmp_path / "datasets.json"))
+    assert fresh.list() == []
+    fresh.restore_from_drive(drive, "tok")
+    assert fresh.get("features_f")["account"] == "acc-02"
+
+
+def test_restore_refuses_to_clobber_a_newer_local_catalog(tmp_path):
+    """Overwriting by default would turn a stale backup into data loss on a
+    machine that happened to be ahead."""
+    from backend.drive_store import Catalog, L2
+    drive = _FakeDrive()
+    cat = Catalog(str(tmp_path / "datasets.json"))
+    cat.upsert(layer=L2, partition_keys={"name": "old"}, account="acc-01")
+    cat.backup_to_drive(drive, "tok")
+    cat.upsert(layer=L2, partition_keys={"name": "new"}, account="acc-01")
+
+    out = cat.restore_from_drive(drive, "tok")
+    assert out["restored"] is False and "overwrite" in out["reason"]
+    assert cat.get("features_new") is not None      # local work survived
+
+    forced = cat.restore_from_drive(drive, "tok", overwrite=True)
+    assert forced["restored"] is True
+
+
+def test_backup_replaces_rather_than_accumulates(tmp_path):
+    """An old catalog is worse than none: it points confidently at datasets that
+    have since moved."""
+    from backend.drive_store import Catalog, L2
+    drive = _FakeDrive()
+    cat = Catalog(str(tmp_path / "datasets.json"))
+    cat.upsert(layer=L2, partition_keys={"name": "f"}, account="acc-01")
+    first = cat.backup_to_drive(drive, "tok")
+    second = cat.backup_to_drive(drive, "tok")
+    assert first["replaced"] is False and second["replaced"] is True
+    assert len(drive.files) == 1
+
+
+def test_backup_of_a_missing_catalog_is_an_error(tmp_path):
+    from backend.drive_store import Catalog, StoreError
+    cat = Catalog(str(tmp_path / "nope.json"))
+    with pytest.raises(StoreError, match="does not exist"):
+        cat.backup_to_drive(_FakeDrive(), "tok")
