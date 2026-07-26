@@ -23,7 +23,9 @@ from backend.transfer_log import get_today_totals
 from backend.binance_ingestion import ingest_binance_klines
 from backend.gemini_probe import probe_all, list_models, pick_default_model, TIER_RULES, DOC_URL
 from backend import s3_views
-from backend.drive_store import Catalog, LAYERS, MIN_FILE_BYTES, MAX_FILE_BYTES, COMPRESSION
+from backend.drive_store import (Catalog, LAYERS, MIN_FILE_BYTES, MAX_FILE_BYTES,
+                                 COMPRESSION, placement_report)
+from backend import sources as source_registry
 from backend.kaggle_control import overview as kaggle_overview
 from backend.kaggle_dispatch import (
     dispatch as kaggle_dispatch, refresh_jobs as kaggle_refresh_jobs,
@@ -682,6 +684,8 @@ def data_sources():
 
     cat = Catalog()
     return {
+        "sources": source_registry.catalogue(),
+        "placement": placement_report(account_manager.get_all_quotas(), cat.list()),
         "s3": {
             "bucket": s3_views.BUCKET,
             "chains": sorted(chains, key=lambda c: -(c["total_gb"] or 0)),

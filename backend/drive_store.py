@@ -151,8 +151,108 @@ def write_options(sort_key: Optional[str] = None) -> Dict[str, Any]:
 # Catalog
 # --------------------------------------------------------------------------
 CATALOG_FIELDS = ("dataset", "layer", "path", "partition_keys", "drive_folder_id",
-                  "rows", "bytes", "files", "time_min", "time_max", "schema",
-                  "source", "updated_at")
+                  "account", "rows", "bytes", "files", "time_min", "time_max",
+                  "schema", "source", "updated_at")
+
+
+# --------------------------------------------------------------------------
+# Placement across several Drive accounts
+# --------------------------------------------------------------------------
+# Why placement lives here rather than in rclone: this app authorises drive.file,
+# which grants access only to files it created itself. An rclone union would
+# upload under rclone's own client id, and those files would then be invisible to
+# this application -- the very isolation that made drive.file safe also rules out
+# federating accounts at the filesystem layer. So the catalog does what a
+# metadata service does in any distributed store: it records where each dataset
+# lives, and reads go straight there.
+#
+# One rule dominates: a dataset is never split across accounts. Splitting would
+# force every read to fan out over several tokens for no gain, since a dataset
+# here is tens to hundreds of MB against a 5 TB per-account limit.
+
+# Domains pinned to a preferred account. Anything unpinned, or pinned to a full
+# account, falls through to most-free-space.
+DOMAIN_PINS: Dict[str, str] = {}
+
+# Leave headroom rather than filling an account: Drive slows and starts refusing
+# writes near the limit, and the daily 750 GB upload cap is per account, so a
+# spread also parallelises ingestion.
+ACCOUNT_HEADROOM = 0.90
+
+
+class PlacementError(RuntimeError):
+    pass
+
+
+def choose_account(accounts: List[Dict[str, Any]], *, domain: Optional[str] = None,
+                   need_bytes: int = 0,
+                   existing: Optional[str] = None) -> str:
+    """Which account should hold this dataset.
+
+    accounts is what GoogleAccountManager.get_all_quotas() returns.
+
+    Order of preference:
+      1. wherever the dataset already lives -- moving it would orphan the
+         folder id every reader holds
+      2. the account pinned to this domain, if it has room
+      3. the connected account with the most free space
+    """
+    usable = [a for a in accounts
+              if a.get("is_connected") and a.get("free", 0) > need_bytes
+              and a.get("used", 0) < a.get("limit", 0) * ACCOUNT_HEADROOM]
+    if not usable:
+        connected = [a for a in accounts if a.get("is_connected")]
+        if not connected:
+            raise PlacementError("no connected Drive account")
+        raise PlacementError(
+            f"no account has room for {need_bytes / 1024**3:.2f} GB within "
+            f"{ACCOUNT_HEADROOM:.0%} of its limit; connected: "
+            f"{[a['account_index'] for a in connected]}")
+
+    if existing and any(a["account_index"] == existing for a in usable):
+        return existing
+    pinned = DOMAIN_PINS.get(domain or "")
+    if pinned and any(a["account_index"] == pinned for a in usable):
+        return pinned
+    return max(usable, key=lambda a: a.get("free", 0))["account_index"]
+
+
+def placement_report(accounts: List[Dict[str, Any]],
+                     entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Per-account usage as this platform sees it, beside Drive's own figure.
+
+    The two differ on purpose: Drive's number covers everything in the account,
+    ours covers only what this platform wrote. A gap is expected, not a fault.
+    """
+    by_account: Dict[str, Dict[str, Any]] = {}
+    for a in accounts:
+        by_account[a["account_index"]] = {
+            "account": a["account_index"], "email": a.get("email"),
+            "connected": a.get("is_connected", False),
+            "drive_used": a.get("used", 0), "drive_limit": a.get("limit", 0),
+            "drive_free": a.get("free", 0),
+            "our_datasets": 0, "our_bytes": 0, "domains": [],
+        }
+    unplaced = 0
+    for e in entries:
+        acc = e.get("account")
+        if not acc or acc not in by_account:
+            unplaced += 1
+            continue
+        slot = by_account[acc]
+        slot["our_datasets"] += 1
+        slot["our_bytes"] += e.get("bytes", 0) or 0
+        domain = (e.get("partition_keys") or [None])[0]
+        if domain and domain not in slot["domains"]:
+            slot["domains"].append(domain)
+    return {
+        "accounts": sorted(by_account.values(), key=lambda x: x["account"]),
+        "unplaced_datasets": unplaced,
+        "pins": dict(DOMAIN_PINS),
+        "note": ("drive_used 为该账号的全部占用，our_bytes 只是本平台写入的部分，"
+                 "两者不一致属正常。数据集不跨账号拆分：拆了每次读取都要多个令牌扇出，"
+                 "而单个数据集只有几十到几百 MB，5 TB 的账号完全装得下"),
+    }
 
 
 class Catalog:
@@ -192,6 +292,7 @@ class Catalog:
                time_min: Optional[str] = None, time_max: Optional[str] = None,
                schema: Optional[List[Dict[str, str]]] = None,
                drive_folder_id: Optional[str] = None,
+               account: Optional[str] = None,
                source: Optional[str] = None) -> Dict[str, Any]:
         path = dataset_path(layer, **partition_keys)
         name = view_name_for(path)
@@ -199,6 +300,7 @@ class Catalog:
             "dataset": name, "layer": layer, "path": path,
             "partition_keys": list(partition_keys),
             "drive_folder_id": drive_folder_id,
+            "account": account,
             "rows": rows, "bytes": bytes_, "files": files,
             "time_min": time_min, "time_max": time_max,
             "schema": schema or [], "source": source,
@@ -217,6 +319,9 @@ class Catalog:
             if existing.get("time_max") and (not time_max or existing["time_max"] > time_max):
                 entry["time_max"] = existing["time_max"]
             entry["drive_folder_id"] = drive_folder_id or existing.get("drive_folder_id")
+            # Never silently relocate: readers hold the folder id, and a dataset
+            # that moved would leave them pointing at nothing.
+            entry["account"] = existing.get("account") or account
             entry["schema"] = schema or existing.get("schema") or []
         self.entries[name] = entry
         self.save()

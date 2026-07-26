@@ -1278,3 +1278,115 @@ def test_dashboard_has_no_placeholder_strategy_data():
         text = f.read_text()
         for fake in ("Alpha-Omega-01", "Mean-Rev-BTC", "Arb-Flash-Bot"):
             assert fake not in text, f"{fake} still present in {f.name}"
+
+
+# --------------------------------------------------------------------------
+# Multi-account placement
+# --------------------------------------------------------------------------
+def _acc(idx, used_tb, limit_tb=5.0, connected=True):
+    tb = 1024 ** 4
+    return {"account_index": idx, "is_connected": connected,
+            "used": int(used_tb * tb), "limit": int(limit_tb * tb),
+            "free": int((limit_tb - used_tb) * tb)}
+
+
+def test_placement_prefers_where_the_dataset_already_lives():
+    """Moving a dataset would orphan the folder id every reader holds."""
+    from backend.drive_store import choose_account
+    accs = [_acc("acc-01", 0.1), _acc("acc-02", 4.0)]
+    # acc-01 has far more room, but the dataset is already on acc-02.
+    assert choose_account(accs, existing="acc-02") == "acc-02"
+    assert choose_account(accs) == "acc-01"          # no history: most free wins
+
+
+def test_placement_skips_accounts_near_their_limit():
+    """Drive slows and starts refusing writes near the limit, so headroom is kept
+    rather than filling an account to the brim."""
+    from backend.drive_store import choose_account, ACCOUNT_HEADROOM
+    assert ACCOUNT_HEADROOM < 1.0
+    accs = [_acc("full", 4.8), _acc("roomy", 1.0)]
+    assert choose_account(accs, need_bytes=10 * 1024 ** 3) == "roomy"
+
+
+def test_placement_honours_a_domain_pin_when_it_fits():
+    from backend.drive_store import choose_account, DOMAIN_PINS
+    DOMAIN_PINS["news"] = "acc-02"
+    try:
+        accs = [_acc("acc-01", 0.1), _acc("acc-02", 2.0)]
+        assert choose_account(accs, domain="news") == "acc-02"
+        # A pinned account with no room must not win.
+        assert choose_account([_acc("acc-01", 0.1), _acc("acc-02", 4.9)],
+                              domain="news", need_bytes=10 * 1024 ** 3) == "acc-01"
+    finally:
+        DOMAIN_PINS.pop("news", None)
+
+
+def test_placement_failure_names_the_connected_accounts():
+    """"no space" without saying where you looked is unactionable."""
+    from backend.drive_store import choose_account, PlacementError
+    with pytest.raises(PlacementError, match="acc-01"):
+        choose_account([_acc("acc-01", 4.9)], need_bytes=int(0.5 * 1024 ** 4))
+    with pytest.raises(PlacementError, match="no connected"):
+        choose_account([_acc("acc-01", 0.1, connected=False)])
+
+
+def test_catalog_never_silently_relocates_a_dataset(tmp_path):
+    from backend.drive_store import Catalog, L2
+    cat = Catalog(str(tmp_path / "c.json"))
+    cat.upsert(layer=L2, partition_keys={"name": "f"}, account="acc-01", bytes_=10)
+    cat.upsert(layer=L2, partition_keys={"name": "f"}, account="acc-02", bytes_=10)
+    assert cat.get("features_f")["account"] == "acc-01"
+
+
+def test_placement_report_separates_drive_usage_from_ours():
+    """Drive's figure covers the whole account; ours covers only what this
+    platform wrote. Conflating them would read as a discrepancy."""
+    from backend.drive_store import placement_report
+    rep = placement_report([_acc("acc-01", 1.0)],
+                           [{"account": "acc-01", "bytes": 5000, "partition_keys": ["domain"]},
+                            {"account": None, "bytes": 1}])
+    a = rep["accounts"][0]
+    assert a["our_bytes"] == 5000 and a["drive_used"] > a["our_bytes"]
+    assert rep["unplaced_datasets"] == 1
+    assert "不跨账号拆分" in rep["note"]
+
+
+# --------------------------------------------------------------------------
+# Source registry
+# --------------------------------------------------------------------------
+def test_in_place_sources_declare_no_fetch():
+    """Declaring both a locator and a fetch is exactly the confusion this mode
+    exists to prevent: measured, copying the AWS dataset in would cost ~62 hours
+    to end up slower and coarser than querying it where it is."""
+    from backend.sources import Source, SourceError, IN_PLACE
+    with pytest.raises(SourceError, match="must not define fetch"):
+        Source(name="x", domain="chain", mode=IN_PLACE, locator="s3://b",
+               fetch=lambda: None)
+    with pytest.raises(SourceError, match="needs a locator"):
+        Source(name="x", domain="chain", mode=IN_PLACE)
+
+
+def test_batch_and_poll_sources_must_declare_partitioning_and_time():
+    from backend.sources import Source, SourceError, BATCH
+    with pytest.raises(SourceError, match="partition_keys"):
+        Source(name="x", domain="news", mode=BATCH, fetch=lambda: None)
+    with pytest.raises(SourceError, match="time_column"):
+        Source(name="x", domain="news", mode=BATCH, fetch=lambda: None,
+               partition_keys=["domain"])
+
+
+def test_registry_marks_which_sources_consume_drive():
+    """in_place sources must not be counted as Drive consumers -- that is the
+    whole point of the mode."""
+    from backend.sources import catalogue, get
+    c = catalogue()
+    by_name = {s["name"]: s for s in c["sources"]}
+    assert by_name["aws_chain"]["stored_on_drive"] is False
+    assert by_name["binance_klines"]["stored_on_drive"] is True
+    assert get("aws_chain").fetch is None
+
+
+def test_source_output_path_matches_the_storage_convention():
+    from backend.sources import get
+    p = get("addr_flow_1d").output_path(name="addr_flow_1d", date="2024-01")
+    assert p == "chainquant/L2_features/name=addr_flow_1d/date=2024-01"
